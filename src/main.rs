@@ -7,7 +7,6 @@ const ADVANCE_MODULUS: usize = 37;
 enum Decision {
     Advance,
     Reject,
-    Unresolved,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -61,7 +60,6 @@ struct WorkCounter {
 struct EngineResult {
     advances: BTreeSet<usize>,
     rejects: usize,
-    unresolved: usize,
     work: WorkCounter,
 }
 
@@ -179,7 +177,6 @@ fn run_oracle(world: &VisibleWorld) -> BTreeSet<usize> {
 fn run_baseline(world: &VisibleWorld) -> EngineResult {
     let mut advances = BTreeSet::new();
     let mut rejects = 0;
-    let mut unresolved = 0;
     let mut work = WorkCounter::default();
 
     for id in 0..world.total_transformations {
@@ -190,16 +187,12 @@ fn run_baseline(world: &VisibleWorld) -> EngineResult {
             Decision::Reject => {
                 rejects += 1;
             }
-            Decision::Unresolved => {
-                unresolved += 1;
-            }
         }
     }
 
     EngineResult {
         advances,
         rejects,
-        unresolved,
         work,
     }
 }
@@ -303,9 +296,6 @@ fn resolve_family(family: CandidateFamily, world: &VisibleWorld, result: &mut En
                 Decision::Reject => {
                     result.rejects += 1;
                 }
-                Decision::Unresolved => {
-                    result.unresolved += 1;
-                }
             }
         }
 
@@ -322,7 +312,6 @@ fn run_pulse(world: &VisibleWorld) -> EngineResult {
     let mut result = EngineResult {
         advances: BTreeSet::new(),
         rejects: 0,
-        unresolved: 0,
         work: WorkCounter::default(),
     };
 
@@ -372,8 +361,6 @@ fn main() {
     println!("  pulse matches oracle:    {pulse_matches_oracle}");
     println!("  decision agreement:      {decision_agreement}");
     println!("  false important prunes:  {false_important_prunes}");
-    println!("  baseline unresolved:     {}", baseline.unresolved);
-    println!("  pulse unresolved:        {}", pulse.unresolved);
     println!();
 
     println!("Decisions");
@@ -399,9 +386,7 @@ fn main() {
     let passed = baseline_matches_oracle
         && pulse_matches_oracle
         && decision_agreement
-        && false_important_prunes == 0
-        && baseline.unresolved == 0
-        && pulse.unresolved == 0;
+        && false_important_prunes == 0;
 
     println!();
 
