@@ -5,21 +5,15 @@ const MIN_QUANTITY: usize = 1;
 const MAX_QUANTITY: usize = 100;
 
 const ALPHA_REGION_START: usize = 20;
-const ALPHA_REGION_END: usize = 26;
-const BETA_REGION_START: usize = 23;
-const BETA_REGION_END: usize = 30;
-const GAMMA_REGION_START: usize = 60;
-const GAMMA_REGION_END: usize = 70;
-
-const ALPHA_FACT: u8 = 1 << 0;
-const BETA_FACT: u8 = 1 << 1;
-const GAMMA_FACT: u8 = 1 << 2;
+const ALPHA_REGION_END: usize = 40;
+const STABLE_REGION_START: usize = 60;
+const STABLE_REGION_END: usize = 70;
 
 const DEFAULT_BASE_EDGE: i64 = 10;
-const DEPENDENCY_BASE_EDGE: i64 = 18;
-const STABLE_ADVANCE_BASE_EDGE: i64 = 24;
+const ALPHA_BASE_EDGE: i64 = 18;
+const STABLE_BASE_EDGE: i64 = 24;
 
-const PHASE_B_ALPHA_ADJUSTMENT: i64 = 8;
+const PHASE_B_ALPHA_ADJUSTMENT: i64 = 3;
 const IMPACT: i64 = 1;
 const FIXED_COST: i64 = 100;
 
@@ -38,15 +32,19 @@ struct CandidateKey {
 #[derive(Debug, Clone, Copy)]
 struct World {
     alpha_adjustment: i64,
-    beta_adjustment: i64,
-    gamma_adjustment: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DecisionCertificate {
+    max_positive_alpha_adjustment: i64,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct CacheEntry {
     key: CandidateKey,
     decision: Decision,
-    dependencies: u8,
+    alpha_dependent: bool,
+    certificate: Option<DecisionCertificate>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -56,7 +54,10 @@ struct WorkCounter {
     fact_accesses: u64,
     cache_checks: u64,
     cache_reuses: u64,
-    cache_invalidations: u64,
+    dependency_invalidations: u64,
+    certificate_checks: u64,
+    certificate_firewalls: u64,
+    semantic_invalidations: u64,
 }
 
 #[derive(Debug)]
@@ -69,22 +70,19 @@ struct RunResult {
 struct PulseResult {
     decisions: Vec<Decision>,
     invalidated_keys: BTreeSet<CandidateKey>,
+    firewalled_keys: BTreeSet<CandidateKey>,
     work: WorkCounter,
 }
 
 fn phase_a_world() -> World {
     World {
         alpha_adjustment: 0,
-        beta_adjustment: 0,
-        gamma_adjustment: 0,
     }
 }
 
 fn phase_b_world() -> World {
     World {
         alpha_adjustment: PHASE_B_ALPHA_ADJUSTMENT,
-        beta_adjustment: 0,
-        gamma_adjustment: 0,
     }
 }
 
@@ -96,51 +94,30 @@ fn in_region(transformation_id: usize, start: usize, end: usize) -> bool {
     (start..end).contains(&transformation_id)
 }
 
-fn dependency_mask(transformation_id: usize) -> u8 {
-    let mut dependencies = 0;
-
-    if in_region(transformation_id, ALPHA_REGION_START, ALPHA_REGION_END) {
-        dependencies |= ALPHA_FACT;
-    }
-
-    if in_region(transformation_id, BETA_REGION_START, BETA_REGION_END) {
-        dependencies |= BETA_FACT;
-    }
-
-    if in_region(transformation_id, GAMMA_REGION_START, GAMMA_REGION_END) {
-        dependencies |= GAMMA_FACT;
-    }
-
-    dependencies
+fn is_alpha_dependent(transformation_id: usize) -> bool {
+    in_region(transformation_id, ALPHA_REGION_START, ALPHA_REGION_END)
 }
 
 fn base_edge(transformation_id: usize) -> i64 {
-    if in_region(transformation_id, GAMMA_REGION_START, GAMMA_REGION_END) {
-        STABLE_ADVANCE_BASE_EDGE
-    } else if in_region(transformation_id, ALPHA_REGION_START, BETA_REGION_END) {
-        DEPENDENCY_BASE_EDGE
+    if in_region(
+        transformation_id,
+        STABLE_REGION_START,
+        STABLE_REGION_END,
+    ) {
+        STABLE_BASE_EDGE
+    } else if is_alpha_dependent(transformation_id) {
+        ALPHA_BASE_EDGE
     } else {
         DEFAULT_BASE_EDGE
     }
 }
 
 fn world_adjustment(transformation_id: usize, world: &World) -> i64 {
-    let dependencies = dependency_mask(transformation_id);
-    let mut adjustment = 0;
-
-    if dependencies & ALPHA_FACT != 0 {
-        adjustment += world.alpha_adjustment;
+    if is_alpha_dependent(transformation_id) {
+        world.alpha_adjustment
+    } else {
+        0
     }
-
-    if dependencies & BETA_FACT != 0 {
-        adjustment += world.beta_adjustment;
-    }
-
-    if dependencies & GAMMA_FACT != 0 {
-        adjustment += world.gamma_adjustment;
-    }
-
-    adjustment
 }
 
 fn profit(transformation_id: usize, quantity: usize, world: &World) -> i64 {
@@ -166,7 +143,7 @@ fn evaluate_exact(
 ) -> Decision {
     work.exact_expansions += 1;
     work.economic_evaluations += 1;
-    work.fact_accesses += 4;
+    work.fact_accesses += 2;
 
     oracle_decision(transformation_id, quantity, world)
 }
@@ -183,6 +160,27 @@ fn run_oracle(world: &World) -> Vec<Decision> {
     decisions
 }
 
+fn build_reject_certificate(
+    transformation_id: usize,
+    quantity: usize,
+    world: &World,
+    decision: Decision,
+) -> Option<DecisionCertificate> {
+    if !is_alpha_dependent(transformation_id) || decision != Decision::Reject {
+        return None;
+    }
+
+    let current_profit = profit(transformation_id, quantity, world);
+    assert!(current_profit <= 0);
+
+    let quantity = quantity as i64;
+    let max_positive_alpha_adjustment = (-current_profit) / quantity;
+
+    Some(DecisionCertificate {
+        max_positive_alpha_adjustment,
+    })
+}
+
 fn build_phase_a_cache(world: &World) -> (Vec<CacheEntry>, WorkCounter) {
     let mut cache = Vec::with_capacity(total_candidate_states());
     let mut work = WorkCounter::default();
@@ -194,11 +192,15 @@ fn build_phase_a_cache(world: &World) -> (Vec<CacheEntry>, WorkCounter) {
                 quantity,
             };
             let decision = evaluate_exact(transformation_id, quantity, world, &mut work);
+            let alpha_dependent = is_alpha_dependent(transformation_id);
+            let certificate =
+                build_reject_certificate(transformation_id, quantity, world, decision);
 
             cache.push(CacheEntry {
                 key,
                 decision,
-                dependencies: dependency_mask(transformation_id),
+                alpha_dependent,
+                certificate,
             });
         }
     }
@@ -220,30 +222,15 @@ fn run_global_recompute(world: &World) -> RunResult {
     RunResult { decisions, work }
 }
 
-fn run_unsafe_stale_reuse(cache: &[CacheEntry]) -> RunResult {
+fn run_dependency_only(cache: &[CacheEntry], world: &World) -> RunResult {
     let mut decisions = Vec::with_capacity(cache.len());
     let mut work = WorkCounter::default();
 
     for entry in cache {
         work.cache_checks += 1;
-        work.cache_reuses += 1;
-        decisions.push(entry.decision);
-    }
 
-    RunResult { decisions, work }
-}
-
-fn run_pulse_selective(cache: &[CacheEntry], world: &World, changed_facts: u8) -> PulseResult {
-    let mut decisions = Vec::with_capacity(cache.len());
-    let mut invalidated_keys = BTreeSet::new();
-    let mut work = WorkCounter::default();
-
-    for entry in cache {
-        work.cache_checks += 1;
-
-        if entry.dependencies & changed_facts != 0 {
-            work.cache_invalidations += 1;
-            invalidated_keys.insert(entry.key);
+        if entry.alpha_dependent {
+            work.dependency_invalidations += 1;
 
             let decision = evaluate_exact(
                 entry.key.transformation_id,
@@ -258,23 +245,87 @@ fn run_pulse_selective(cache: &[CacheEntry], world: &World, changed_facts: u8) -
         }
     }
 
+    RunResult { decisions, work }
+}
+
+fn run_unsafe_semantic_reuse(cache: &[CacheEntry]) -> RunResult {
+    let mut decisions = Vec::with_capacity(cache.len());
+    let mut work = WorkCounter::default();
+
+    for entry in cache {
+        work.cache_checks += 1;
+        work.cache_reuses += 1;
+        decisions.push(entry.decision);
+    }
+
+    RunResult { decisions, work }
+}
+
+fn certificate_allows_reuse(
+    entry: &CacheEntry,
+    current_alpha_adjustment: i64,
+    work: &mut WorkCounter,
+) -> bool {
+    work.certificate_checks += 1;
+
+    match entry.certificate {
+        Some(certificate) => {
+            current_alpha_adjustment <= certificate.max_positive_alpha_adjustment
+        }
+        None => false,
+    }
+}
+
+fn run_pulse_semantic(cache: &[CacheEntry], world: &World) -> PulseResult {
+    let mut decisions = Vec::with_capacity(cache.len());
+    let mut invalidated_keys = BTreeSet::new();
+    let mut firewalled_keys = BTreeSet::new();
+    let mut work = WorkCounter::default();
+
+    for entry in cache {
+        work.cache_checks += 1;
+
+        if !entry.alpha_dependent {
+            work.cache_reuses += 1;
+            decisions.push(entry.decision);
+            continue;
+        }
+
+        work.dependency_invalidations += 1;
+
+        if certificate_allows_reuse(entry, world.alpha_adjustment, &mut work) {
+            work.certificate_firewalls += 1;
+            work.cache_reuses += 1;
+            firewalled_keys.insert(entry.key);
+            decisions.push(entry.decision);
+        } else {
+            work.semantic_invalidations += 1;
+            invalidated_keys.insert(entry.key);
+
+            let decision = evaluate_exact(
+                entry.key.transformation_id,
+                entry.key.quantity,
+                world,
+                &mut work,
+            );
+            decisions.push(decision);
+        }
+    }
+
     PulseResult {
         decisions,
         invalidated_keys,
+        firewalled_keys,
         work,
     }
 }
 
-fn expected_affected_keys(cache: &[CacheEntry], changed_facts: u8) -> BTreeSet<CandidateKey> {
-    let mut affected = BTreeSet::new();
-
-    for entry in cache {
-        if entry.dependencies & changed_facts != 0 {
-            affected.insert(entry.key);
-        }
-    }
-
-    affected
+fn dependency_cone(cache: &[CacheEntry]) -> BTreeSet<CandidateKey> {
+    cache
+        .iter()
+        .filter(|entry| entry.alpha_dependent)
+        .map(|entry| entry.key)
+        .collect()
 }
 
 fn changed_decision_keys(
@@ -285,15 +336,18 @@ fn changed_decision_keys(
     assert_eq!(phase_a.len(), phase_b.len());
     assert_eq!(phase_a.len(), cache.len());
 
-    let mut changed = BTreeSet::new();
-
-    for ((before, after), entry) in phase_a.iter().zip(phase_b).zip(cache) {
-        if before != after {
-            changed.insert(entry.key);
-        }
-    }
-
-    changed
+    phase_a
+        .iter()
+        .zip(phase_b)
+        .zip(cache)
+        .filter_map(|((before, after), entry)| {
+            if before != after {
+                Some(entry.key)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn decision_mismatches(reference: &[Decision], candidate: &[Decision]) -> usize {
@@ -313,28 +367,29 @@ fn advance_count(decisions: &[Decision]) -> usize {
         .count()
 }
 
-fn count_entries_with_fact(cache: &[CacheEntry], fact: u8) -> usize {
-    cache
-        .iter()
-        .filter(|entry| entry.dependencies & fact != 0)
-        .count()
-}
-
-fn count_entries_with_both_facts(cache: &[CacheEntry], first: u8, second: u8) -> usize {
-    cache
-        .iter()
-        .filter(|entry| entry.dependencies & first != 0 && entry.dependencies & second != 0)
-        .count()
-}
-
 fn print_work(label: &str, work: &WorkCounter) {
     println!("{label}");
-    println!("  exact expansions:     {}", work.exact_expansions);
-    println!("  economic evaluations: {}", work.economic_evaluations);
-    println!("  fact accesses:        {}", work.fact_accesses);
-    println!("  cache checks:         {}", work.cache_checks);
-    println!("  cache reuses:         {}", work.cache_reuses);
-    println!("  cache invalidations:  {}", work.cache_invalidations);
+    println!("  exact expansions:          {}", work.exact_expansions);
+    println!(
+        "  economic evaluations:      {}",
+        work.economic_evaluations
+    );
+    println!("  fact accesses:             {}", work.fact_accesses);
+    println!("  cache checks:              {}", work.cache_checks);
+    println!("  cache reuses:              {}", work.cache_reuses);
+    println!(
+        "  dependency invalidations:  {}",
+        work.dependency_invalidations
+    );
+    println!("  certificate checks:        {}", work.certificate_checks);
+    println!(
+        "  certificate firewalls:     {}",
+        work.certificate_firewalls
+    );
+    println!(
+        "  semantic invalidations:    {}",
+        work.semantic_invalidations
+    );
 }
 
 fn main() {
@@ -344,78 +399,81 @@ fn main() {
 
     let phase_a = phase_a_world();
     let phase_b = phase_b_world();
-    let changed_facts = ALPHA_FACT;
 
     let oracle_a = run_oracle(&phase_a);
     let oracle_b = run_oracle(&phase_b);
 
     let (phase_a_cache, cache_build_work) = build_phase_a_cache(&phase_a);
     let global_b = run_global_recompute(&phase_b);
-    let unsafe_b = run_unsafe_stale_reuse(&phase_a_cache);
-    let pulse_b = run_pulse_selective(&phase_a_cache, &phase_b, changed_facts);
+    let dependency_b = run_dependency_only(&phase_a_cache, &phase_b);
+    let unsafe_b = run_unsafe_semantic_reuse(&phase_a_cache);
+    let pulse_b = run_pulse_semantic(&phase_a_cache, &phase_b);
 
-    let cache_decisions: Vec<Decision> = phase_a_cache.iter().map(|entry| entry.decision).collect();
+    let cache_decisions: Vec<Decision> =
+        phase_a_cache.iter().map(|entry| entry.decision).collect();
 
-    let expected_affected = expected_affected_keys(&phase_a_cache, changed_facts);
+    let dependency_keys = dependency_cone(&phase_a_cache);
     let changed_truth = changed_decision_keys(&oracle_a, &oracle_b, &phase_a_cache);
+
+    let expected_firewalled: BTreeSet<CandidateKey> =
+        dependency_keys.difference(&changed_truth).copied().collect();
 
     let cache_matches_phase_a = cache_decisions == oracle_a;
     let global_matches_oracle = global_b.decisions == oracle_b;
+    let dependency_matches_oracle = dependency_b.decisions == oracle_b;
     let pulse_matches_oracle = pulse_b.decisions == oracle_b;
 
-    let stale_authorized_decisions = decision_mismatches(&oracle_b, &unsafe_b.decisions);
-    let pulse_stale_authorized_decisions = decision_mismatches(&oracle_b, &pulse_b.decisions);
+    let unsafe_stale_authorized = decision_mismatches(&oracle_b, &unsafe_b.decisions);
+    let pulse_stale_authorized = decision_mismatches(&oracle_b, &pulse_b.decisions);
 
-    let missed_invalidations = expected_affected
+    let missed_semantic_invalidations = changed_truth
         .difference(&pulse_b.invalidated_keys)
         .count();
 
-    let false_invalidations = pulse_b
+    let false_semantic_invalidations = pulse_b
         .invalidated_keys
-        .difference(&expected_affected)
+        .difference(&changed_truth)
         .count();
 
-    let changed_truth_outside_dependency_cone =
-        changed_truth.difference(&expected_affected).count();
+    let missed_firewalls = expected_firewalled
+        .difference(&pulse_b.firewalled_keys)
+        .count();
 
-    let alpha_entries = count_entries_with_fact(&phase_a_cache, ALPHA_FACT);
-    let beta_entries = count_entries_with_fact(&phase_a_cache, BETA_FACT);
-    let gamma_entries = count_entries_with_fact(&phase_a_cache, GAMMA_FACT);
-
-    let alpha_beta_overlap = count_entries_with_both_facts(&phase_a_cache, ALPHA_FACT, BETA_FACT);
+    let false_firewalls = pulse_b
+        .firewalled_keys
+        .difference(&expected_firewalled)
+        .count();
 
     let total_states = total_candidate_states();
-    let unaffected_entries = total_states - expected_affected.len();
+    let unaffected_entries = total_states - dependency_keys.len();
 
-    println!("Fixture: EZ-009 — Revocable Knowledge / Selective Invalidation");
+    println!("Fixture: EZ-010 — Semantic Invalidation / Decision Firewall");
     println!("Total candidate states: {total_states}");
     println!(
         "Alpha dependency region: {}..{}",
         ALPHA_REGION_START, ALPHA_REGION_END
     );
     println!(
-        "Beta dependency region:  {}..{}",
-        BETA_REGION_START, BETA_REGION_END
+        "Stable ADVANCE region:    {}..{}",
+        STABLE_REGION_START, STABLE_REGION_END
     );
     println!(
-        "Gamma dependency region: {}..{}",
-        GAMMA_REGION_START, GAMMA_REGION_END
+        "Phase B Alpha adjustment: {}",
+        phase_b.alpha_adjustment
     );
-    println!("Changed fact mask: {changed_facts}");
     println!();
 
-    println!("Dependency topology");
-    println!("  Alpha-dependent entries:       {alpha_entries}");
-    println!("  Beta-dependent entries:        {beta_entries}");
-    println!("  Gamma-dependent entries:       {gamma_entries}");
-    println!("  Alpha/Beta overlap entries:    {alpha_beta_overlap}");
+    println!("Semantic topology");
     println!(
-        "  Expected affected cone:        {}",
-        expected_affected.len()
+        "  changed dependency cone:       {}",
+        dependency_keys.len()
     );
-    println!("  Expected unaffected cache:     {unaffected_entries}");
-    println!("  Decisions that truly changed:  {}", changed_truth.len());
-    println!("  Truth changes outside cone:    {changed_truth_outside_dependency_cone}");
+    println!("  unaffected entries:            {unaffected_entries}");
+    println!("  decisions that truly changed:  {}", changed_truth.len());
+    println!(
+        "  provably invariant dependents: {}",
+        expected_firewalled.len()
+    );
     println!();
 
     println!("Oracle");
@@ -423,36 +481,40 @@ fn main() {
     println!("  Phase B ADVANCE: {}", advance_count(&oracle_b));
     println!();
 
-    println!("Unsafe stale-cache reuse");
+    println!("Unsafe semantic reuse");
     println!(
-        "  ADVANCE:                   {}",
+        "  ADVANCE:                    {}",
         advance_count(&unsafe_b.decisions)
     );
-    println!("  stale-authorized decisions: {stale_authorized_decisions}");
     println!(
-        "  exact recomputations:       {}",
-        unsafe_b.work.exact_expansions
+        "  stale-authorized decisions: {unsafe_stale_authorized}"
     );
-    println!(
-        "  stale cache reuses:         {}",
-        unsafe_b.work.cache_reuses
-    );
+    println!("  exact recomputations:       {}", unsafe_b.work.exact_expansions);
     println!();
 
     println!("Correctness");
-    println!("  Phase A cache matches Oracle: {cache_matches_phase_a}");
-    println!("  global matches Oracle:        {global_matches_oracle}");
-    println!("  Pulse matches Oracle:         {pulse_matches_oracle}");
-    println!("  Pulse stale-authorized:       {pulse_stale_authorized_decisions}");
-    println!("  missed invalidations:         {missed_invalidations}");
-    println!("  false invalidations:          {false_invalidations}");
+    println!("  Phase A cache matches Oracle:       {cache_matches_phase_a}");
+    println!("  global matches Oracle:              {global_matches_oracle}");
     println!(
-        "  invalidated entries:          {}",
+        "  dependency-only matches Oracle:     {dependency_matches_oracle}"
+    );
+    println!("  Pulse matches Oracle:               {pulse_matches_oracle}");
+    println!("  Pulse stale-authorized:             {pulse_stale_authorized}");
+    println!(
+        "  missed semantic invalidations:      {missed_semantic_invalidations}"
+    );
+    println!(
+        "  false semantic invalidations:       {false_semantic_invalidations}"
+    );
+    println!("  missed certificate firewalls:       {missed_firewalls}");
+    println!("  false certificate firewalls:        {false_firewalls}");
+    println!(
+        "  Pulse semantic invalidations:       {}",
         pulse_b.invalidated_keys.len()
     );
     println!(
-        "  unaffected entries reused:    {}",
-        pulse_b.work.cache_reuses
+        "  Pulse certificate firewalls:        {}",
+        pulse_b.firewalled_keys.len()
     );
     println!();
 
@@ -460,38 +522,53 @@ fn main() {
     println!();
     print_work("Global Phase B recomputation", &global_b.work);
     println!();
-    print_work("Pulse Phase B selective invalidation", &pulse_b.work);
+    print_work("Dependency-only Phase B invalidation", &dependency_b.work);
+    println!();
+    print_work("Pulse Phase B semantic invalidation", &pulse_b.work);
     println!();
 
-    let global_expansions = global_b.work.exact_expansions as f64;
+    let dependency_expansions = dependency_b.work.exact_expansions as f64;
     let pulse_expansions = pulse_b.work.exact_expansions as f64;
-    let expansion_reduction = 100.0 * (global_expansions - pulse_expansions) / global_expansions;
+    let semantic_reduction =
+        100.0 * (dependency_expansions - pulse_expansions) / dependency_expansions;
+
+    let global_expansions = global_b.work.exact_expansions as f64;
+    let global_reduction =
+        100.0 * (global_expansions - pulse_expansions) / global_expansions;
 
     println!(
-        "Selective recomputation reduction: {:.2}%",
-        expansion_reduction
+        "Reduction vs dependency-only recomputation: {:.2}%",
+        semantic_reduction
+    );
+    println!(
+        "Reduction vs global recomputation:          {:.2}%",
+        global_reduction
     );
 
     let passed = cache_matches_phase_a
         && global_matches_oracle
+        && dependency_matches_oracle
         && pulse_matches_oracle
-        && stale_authorized_decisions > 0
-        && pulse_stale_authorized_decisions == 0
-        && missed_invalidations == 0
-        && false_invalidations == 0
-        && changed_truth_outside_dependency_cone == 0
-        && pulse_b.invalidated_keys == expected_affected
-        && pulse_b.work.cache_reuses == unaffected_entries as u64
-        && pulse_b.work.cache_invalidations == expected_affected.len() as u64
-        && pulse_b.work.exact_expansions == expected_affected.len() as u64
-        && pulse_b.work.exact_expansions < global_b.work.exact_expansions;
+        && unsafe_stale_authorized > 0
+        && pulse_stale_authorized == 0
+        && missed_semantic_invalidations == 0
+        && false_semantic_invalidations == 0
+        && missed_firewalls == 0
+        && false_firewalls == 0
+        && pulse_b.invalidated_keys == changed_truth
+        && pulse_b.firewalled_keys == expected_firewalled
+        && pulse_b.work.semantic_invalidations == changed_truth.len() as u64
+        && pulse_b.work.certificate_firewalls == expected_firewalled.len() as u64
+        && pulse_b.work.exact_expansions == changed_truth.len() as u64
+        && pulse_b.work.exact_expansions < dependency_b.work.exact_expansions
+        && dependency_b.work.exact_expansions < global_b.work.exact_expansions;
 
     println!();
 
     if passed {
-        println!("EZ-009 CORRECTNESS GATE: PASS");
+        println!("EZ-010 CORRECTNESS GATE: PASS");
     } else {
-        println!("EZ-009 CORRECTNESS GATE: FAIL");
+        println!("EZ-010 CORRECTNESS GATE: FAIL");
         std::process::exit(1);
     }
 }
