@@ -271,11 +271,7 @@ fn run_dependency_only(cache: &[CacheEntry], world: &World) -> RunResult {
     RunResult { decisions, work }
 }
 
-fn local_certificate_allows(
-    entry: &CacheEntry,
-    adjustment: i64,
-    work: &mut WorkCounter,
-) -> bool {
+fn local_certificate_allows(entry: &CacheEntry, adjustment: i64, work: &mut WorkCounter) -> bool {
     work.local_certificate_checks += 1;
 
     match entry.certificate {
@@ -344,11 +340,7 @@ fn composed_adjustment(entry: &CacheEntry, world: &World) -> i64 {
     adjustment
 }
 
-fn composed_certificate_allows(
-    entry: &CacheEntry,
-    world: &World,
-    work: &mut WorkCounter,
-) -> bool {
+fn composed_certificate_allows(entry: &CacheEntry, world: &World, work: &mut WorkCounter) -> bool {
     work.composed_certificate_checks += 1;
 
     match entry.certificate {
@@ -415,9 +407,7 @@ fn dependency_union(cache: &[CacheEntry]) -> BTreeSet<CandidateKey> {
 fn overlap_keys(cache: &[CacheEntry]) -> BTreeSet<CandidateKey> {
     cache
         .iter()
-        .filter(|entry| {
-            is_overlap_region(entry.key.transformation_id)
-        })
+        .filter(|entry| is_overlap_region(entry.key.transformation_id))
         .map(|entry| entry.key)
         .collect()
 }
@@ -464,7 +454,10 @@ fn advance_count(decisions: &[Decision]) -> usize {
 fn print_work(label: &str, work: &WorkCounter) {
     println!("{label}");
     println!("  exact expansions:              {}", work.exact_expansions);
-    println!("  economic evaluations:          {}", work.economic_evaluations);
+    println!(
+        "  economic evaluations:          {}",
+        work.economic_evaluations
+    );
     println!("  fact accesses:                 {}", work.fact_accesses);
     println!("  cache checks:                  {}", work.cache_checks);
     println!("  cache reuses:                  {}", work.cache_reuses);
@@ -512,8 +505,7 @@ fn main() {
     let unsafe_b = run_unsafe_independent_certificates(&phase_a_cache, &phase_b);
     let pulse_b = run_pulse_composed(&phase_a_cache, &phase_b);
 
-    let cache_decisions: Vec<Decision> =
-        phase_a_cache.iter().map(|entry| entry.decision).collect();
+    let cache_decisions: Vec<Decision> = phase_a_cache.iter().map(|entry| entry.decision).collect();
 
     let dependency_keys = dependency_union(&phase_a_cache);
     let overlap = overlap_keys(&phase_a_cache);
@@ -574,12 +566,16 @@ fn main() {
     println!();
 
     println!("Ground truth");
-    println!("  Phase A Oracle ADVANCE:        {}", advance_count(&oracle_a));
-    println!("  Phase B Oracle ADVANCE:        {}", advance_count(&oracle_b));
-    println!("  decisions that truly changed:  {}", changed_truth.len());
     println!(
-        "  changes outside dependency:    {changed_outside_dependency}"
+        "  Phase A Oracle ADVANCE:        {}",
+        advance_count(&oracle_a)
     );
+    println!(
+        "  Phase B Oracle ADVANCE:        {}",
+        advance_count(&oracle_b)
+    );
+    println!("  decisions that truly changed:  {}", changed_truth.len());
+    println!("  changes outside dependency:    {changed_outside_dependency}");
     println!("  changes outside overlap:       {changed_outside_overlap}");
     println!(
         "  provably invariant dependents: {}",
@@ -592,9 +588,7 @@ fn main() {
         "  ADVANCE:                       {}",
         advance_count(&unsafe_b.decisions)
     );
-    println!(
-        "  stale-authorized decisions:    {unsafe_stale_authorized}"
-    );
+    println!("  stale-authorized decisions:    {unsafe_stale_authorized}");
     println!(
         "  exact recomputations:          {}",
         unsafe_b.work.exact_expansions
@@ -611,12 +605,8 @@ fn main() {
     println!("  dependency-only matches:       {dependency_matches_oracle}");
     println!("  Pulse matches Oracle:          {pulse_matches_oracle}");
     println!("  Pulse stale-authorized:        {pulse_stale_authorized}");
-    println!(
-        "  missed joint invalidations:    {missed_joint_invalidations}"
-    );
-    println!(
-        "  false joint invalidations:     {false_joint_invalidations}"
-    );
+    println!("  missed joint invalidations:    {missed_joint_invalidations}");
+    println!("  false joint invalidations:     {false_joint_invalidations}");
     println!("  missed composed firewalls:     {missed_firewalls}");
     println!("  false composed firewalls:      {false_firewalls}");
     println!(
@@ -651,8 +641,7 @@ fn main() {
         100.0 * (dependency_expansions - pulse_expansions) / dependency_expansions;
 
     let global_expansions = global_b.work.exact_expansions as f64;
-    let global_reduction =
-        100.0 * (global_expansions - pulse_expansions) / global_expansions;
+    let global_reduction = 100.0 * (global_expansions - pulse_expansions) / global_expansions;
 
     println!(
         "Reduction vs dependency-only recomputation: {:.2}%",
