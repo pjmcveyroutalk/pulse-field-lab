@@ -11,7 +11,7 @@ const BETA_REGION_END: usize = 30;
 const GAMMA_REGION_START: usize = 60;
 const GAMMA_REGION_END: usize = 70;
 
-const ALPHA_FACT: u8 = 1 << 0;
+const ALPHA_FACT: u8 = 1;
 const BETA_FACT: u8 = 1 << 1;
 const GAMMA_FACT: u8 = 1 << 2;
 
@@ -233,11 +233,7 @@ fn run_unsafe_stale_reuse(cache: &[CacheEntry]) -> RunResult {
     RunResult { decisions, work }
 }
 
-fn run_pulse_selective(
-    cache: &[CacheEntry],
-    world: &World,
-    changed_facts: u8,
-) -> PulseResult {
+fn run_pulse_selective(cache: &[CacheEntry], world: &World, changed_facts: u8) -> PulseResult {
     let mut decisions = Vec::with_capacity(cache.len());
     let mut invalidated_keys = BTreeSet::new();
     let mut work = WorkCounter::default();
@@ -358,8 +354,7 @@ fn main() {
     let unsafe_b = run_unsafe_stale_reuse(&phase_a_cache);
     let pulse_b = run_pulse_selective(&phase_a_cache, &phase_b, changed_facts);
 
-    let cache_decisions: Vec<Decision> =
-        phase_a_cache.iter().map(|entry| entry.decision).collect();
+    let cache_decisions: Vec<Decision> = phase_a_cache.iter().map(|entry| entry.decision).collect();
 
     let expected_affected = expected_affected_keys(&phase_a_cache, changed_facts);
     let changed_truth = changed_decision_keys(&oracle_a, &oracle_b, &phase_a_cache);
@@ -387,8 +382,7 @@ fn main() {
     let beta_entries = count_entries_with_fact(&phase_a_cache, BETA_FACT);
     let gamma_entries = count_entries_with_fact(&phase_a_cache, GAMMA_FACT);
 
-    let alpha_beta_overlap =
-        count_entries_with_both_facts(&phase_a_cache, ALPHA_FACT, BETA_FACT);
+    let alpha_beta_overlap = count_entries_with_both_facts(&phase_a_cache, ALPHA_FACT, BETA_FACT);
 
     let total_states = total_candidate_states();
     let unaffected_entries = total_states - expected_affected.len();
@@ -415,7 +409,10 @@ fn main() {
     println!("  Beta-dependent entries:        {beta_entries}");
     println!("  Gamma-dependent entries:       {gamma_entries}");
     println!("  Alpha/Beta overlap entries:    {alpha_beta_overlap}");
-    println!("  Expected affected cone:        {}", expected_affected.len());
+    println!(
+        "  Expected affected cone:        {}",
+        expected_affected.len()
+    );
     println!("  Expected unaffected cache:     {unaffected_entries}");
     println!("  Decisions that truly changed:  {}", changed_truth.len());
     println!("  Truth changes outside cone:    {changed_truth_outside_dependency_cone}");
@@ -436,7 +433,10 @@ fn main() {
         "  exact recomputations:       {}",
         unsafe_b.work.exact_expansions
     );
-    println!("  stale cache reuses:         {}", unsafe_b.work.cache_reuses);
+    println!(
+        "  stale cache reuses:         {}",
+        unsafe_b.work.cache_reuses
+    );
     println!();
 
     println!("Correctness");
@@ -465,8 +465,7 @@ fn main() {
 
     let global_expansions = global_b.work.exact_expansions as f64;
     let pulse_expansions = pulse_b.work.exact_expansions as f64;
-    let expansion_reduction =
-        100.0 * (global_expansions - pulse_expansions) / global_expansions;
+    let expansion_reduction = 100.0 * (global_expansions - pulse_expansions) / global_expansions;
 
     println!(
         "Selective recomputation reduction: {:.2}%",
