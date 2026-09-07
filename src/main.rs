@@ -4,17 +4,22 @@ const TRANSFORMATION_COUNT: usize = 100;
 const MIN_QUANTITY: usize = 1;
 const MAX_QUANTITY: usize = 100;
 
-const MERGE_REGION_START: usize = 20;
-const MERGE_REGION_END: usize = 30;
-const HIDDEN_CAPABILITY_BOUNDARY: usize = 25;
+const NOVELTY_REGION_START: usize = 20;
+const NOVELTY_REGION_END: usize = 30;
+const NOVELTY_ACTIVE_SPLIT: usize = 25;
+const SENSITIVE_REGION_START: usize = 50;
+const SENSITIVE_REGION_END: usize = 75;
 
-const MIN_EDGE: i64 = 24;
-const MAX_EDGE: i64 = 30;
-const MIN_IMPACT: i64 = 1;
-const FIXED_COST: i64 = 20;
+const SAFE_BASE_EDGE: i64 = 10;
+const SENSITIVE_BASE_EDGE: i64 = 24;
+const IMPACT: i64 = 1;
+const FIXED_COST: i64 = 100;
 
-const MERGE_REGION_EDGE_ADJUSTMENT: i64 = 20;
-const EXACT_FAMILY_POINT_LIMIT: usize = 64;
+const SAFE_UNKNOWN_MIN: i64 = -2;
+const SAFE_UNKNOWN_MAX: i64 = 2;
+const NOVELTY_UNKNOWN_MAX: i64 = 20;
+const SENSITIVE_UNKNOWN_MIN: i64 = -5;
+const SENSITIVE_UNKNOWN_MAX: i64 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Decision {
@@ -29,66 +34,9 @@ struct CandidateKey {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Evidence {
-    edge_adjustment: i64,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct VisibleWorld {
-    transformation_count: usize,
-    min_quantity: usize,
-    max_quantity: usize,
-    merge_region_start: usize,
-    merge_region_end: usize,
-    hidden_capability_boundary: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct OracleCandidate {
-    key: CandidateKey,
-    execution_enabled: bool,
-    gross_value: i64,
-    cost: i64,
-}
-
-impl OracleCandidate {
-    fn decision(self) -> Decision {
-        if self.execution_enabled && self.gross_value - self.cost > 0 {
-            Decision::Advance
-        } else {
-            Decision::Reject
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-struct WorkCounter {
-    family_evaluations: u64,
-    family_splits: u64,
-    semantic_splits: u64,
-    family_rejections: u64,
-    capability_family_rejections: u64,
-    exact_expansions: u64,
-    economic_evaluations: u64,
-    fact_accesses: u64,
-    bound_evaluations: u64,
-    compression_checks: u64,
-    dangerous_merges_refused: u64,
-}
-
-#[derive(Debug)]
-struct EngineResult {
-    advances: BTreeSet<CandidateKey>,
-    rejects: usize,
-    work: WorkCounter,
-}
-
-#[derive(Debug)]
-struct UnsafeCoarseResult {
-    advances: BTreeSet<CandidateKey>,
-    rejects: usize,
-    exact_expansions: u64,
-    merged_points: usize,
+struct World {
+    novelty_generation: u64,
+    novelty_active: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -100,16 +48,8 @@ struct CandidateFamily {
 }
 
 impl CandidateFamily {
-    fn id_len(self) -> usize {
-        self.id_end - self.id_start
-    }
-
-    fn quantity_len(self) -> usize {
-        self.quantity_end - self.quantity_start
-    }
-
     fn point_count(self) -> usize {
-        self.id_len() * self.quantity_len()
+        (self.id_end - self.id_start) * (self.quantity_end - self.quantity_start)
     }
 
     fn is_empty(self) -> bool {
@@ -117,102 +57,175 @@ impl CandidateFamily {
     }
 }
 
-fn visible_world() -> VisibleWorld {
-    VisibleWorld {
-        transformation_count: TRANSFORMATION_COUNT,
-        min_quantity: MIN_QUANTITY,
-        max_quantity: MAX_QUANTITY,
-        merge_region_start: MERGE_REGION_START,
-        merge_region_end: MERGE_REGION_END,
-        hidden_capability_boundary: HIDDEN_CAPABILITY_BOUNDARY,
+#[derive(Debug, Clone, Copy)]
+struct SafeIgnoranceCertificate {
+    id_start: usize,
+    id_end: usize,
+    dependency_generation: u64,
+    decision: Decision,
+}
+
+#[derive(Debug, Default, Clone)]
+struct WorkCounter {
+    family_evaluations: u64,
+    family_splits: u64,
+    semantic_splits: u64,
+    family_rejections: u64,
+    exact_expansions: u64,
+    economic_evaluations: u64,
+    bound_evaluations: u64,
+    fact_accesses: u64,
+    certificate_checks: u64,
+    certificates_issued: u64,
+    certificates_reused: u64,
+    certificates_invalidated: u64,
+    reactivated_points: u64,
+}
+
+#[derive(Debug)]
+struct EngineResult {
+    advances: BTreeSet<CandidateKey>,
+    rejects: usize,
+    work: WorkCounter,
+}
+
+#[derive(Debug)]
+struct UnsafeResult {
+    advances: BTreeSet<CandidateKey>,
+    rejects: usize,
+    exact_expansions: u64,
+    stale_suppressed_points: usize,
+}
+
+fn phase_a_world() -> World {
+    World {
+        novelty_generation: 1,
+        novelty_active: false,
     }
 }
 
-fn transformation_in_merge_region(transformation_id: usize, world: &VisibleWorld) -> bool {
-    transformation_id >= world.merge_region_start && transformation_id < world.merge_region_end
+fn phase_b_world() -> World {
+    World {
+        novelty_generation: 2,
+        novelty_active: true,
+    }
 }
 
-fn transformation_execution_enabled(transformation_id: usize, world: &VisibleWorld) -> bool {
-    if transformation_in_merge_region(transformation_id, world) {
-        transformation_id < world.hidden_capability_boundary
+fn in_region(transformation_id: usize, start: usize, end: usize) -> bool {
+    transformation_id >= start && transformation_id < end
+}
+
+fn in_novelty_region(transformation_id: usize) -> bool {
+    in_region(
+        transformation_id,
+        NOVELTY_REGION_START,
+        NOVELTY_REGION_END,
+    )
+}
+
+fn in_sensitive_region(transformation_id: usize) -> bool {
+    in_region(
+        transformation_id,
+        SENSITIVE_REGION_START,
+        SENSITIVE_REGION_END,
+    )
+}
+
+fn base_edge(transformation_id: usize) -> i64 {
+    if in_sensitive_region(transformation_id) {
+        SENSITIVE_BASE_EDGE
     } else {
-        true
+        SAFE_BASE_EDGE
     }
 }
 
-fn transformation_edge(transformation_id: usize) -> i64 {
-    MIN_EDGE + (transformation_id % 7) as i64
-}
-
-fn transformation_impact(transformation_id: usize) -> i64 {
-    MIN_IMPACT + (transformation_id % 3) as i64
-}
-
-fn current_evidence_for_candidate(transformation_id: usize, world: &VisibleWorld) -> Evidence {
-    Evidence {
-        edge_adjustment: if transformation_in_merge_region(transformation_id, world) {
-            MERGE_REGION_EDGE_ADJUSTMENT
+fn actual_unknown_adjustment(transformation_id: usize, world: &World) -> i64 {
+    if world.novelty_active && in_novelty_region(transformation_id) {
+        if transformation_id < NOVELTY_ACTIVE_SPLIT {
+            NOVELTY_UNKNOWN_MAX
         } else {
             0
-        },
+        }
+    } else if in_sensitive_region(transformation_id) {
+        match transformation_id % 3 {
+            0 => -4,
+            1 => 0,
+            _ => 4,
+        }
+    } else {
+        0
     }
 }
 
-fn candidate_profit(transformation_id: usize, quantity: usize, evidence: Evidence) -> i64 {
-    let quantity = quantity as i64;
-    let edge = transformation_edge(transformation_id) + evidence.edge_adjustment;
-    let impact = transformation_impact(transformation_id);
+fn unknown_bounds_for_family(family: CandidateFamily, world: &World) -> (i64, i64) {
+    if family.id_start >= SENSITIVE_REGION_START && family.id_end <= SENSITIVE_REGION_END {
+        (SENSITIVE_UNKNOWN_MIN, SENSITIVE_UNKNOWN_MAX)
+    } else if family.id_start >= NOVELTY_REGION_START && family.id_end <= NOVELTY_REGION_END {
+        let upper = if world.novelty_active {
+            NOVELTY_UNKNOWN_MAX
+        } else {
+            SAFE_UNKNOWN_MAX
+        };
 
-    quantity * edge - impact * quantity * quantity - FIXED_COST
+        (SAFE_UNKNOWN_MIN, upper)
+    } else {
+        (SAFE_UNKNOWN_MIN, SAFE_UNKNOWN_MAX)
+    }
 }
 
-fn oracle_candidate(
+fn family_base_edge(family: CandidateFamily) -> i64 {
+    if family.id_start >= SENSITIVE_REGION_START && family.id_end <= SENSITIVE_REGION_END {
+        SENSITIVE_BASE_EDGE
+    } else {
+        SAFE_BASE_EDGE
+    }
+}
+
+fn profit_with_adjustment(
     transformation_id: usize,
     quantity: usize,
-    world: &VisibleWorld,
-) -> OracleCandidate {
-    assert!(transformation_id < world.transformation_count);
-    assert!(quantity >= world.min_quantity);
-    assert!(quantity <= world.max_quantity);
+    unknown_adjustment: i64,
+) -> i64 {
+    let quantity = quantity as i64;
+    let edge = base_edge(transformation_id) + unknown_adjustment;
 
-    let evidence = current_evidence_for_candidate(transformation_id, world);
-    let quantity_i64 = quantity as i64;
-    let edge = transformation_edge(transformation_id) + evidence.edge_adjustment;
-    let impact = transformation_impact(transformation_id);
+    quantity * edge - IMPACT * quantity * quantity - FIXED_COST
+}
 
-    OracleCandidate {
-        key: CandidateKey {
-            transformation_id,
-            quantity,
-        },
-        execution_enabled: transformation_execution_enabled(transformation_id, world),
-        gross_value: quantity_i64 * edge,
-        cost: impact * quantity_i64 * quantity_i64 + FIXED_COST,
+fn oracle_decision(transformation_id: usize, quantity: usize, world: &World) -> Decision {
+    let adjustment = actual_unknown_adjustment(transformation_id, world);
+    let profit = profit_with_adjustment(transformation_id, quantity, adjustment);
+
+    if profit > 0 {
+        Decision::Advance
+    } else {
+        Decision::Reject
     }
 }
 
 fn evaluate_exact(
     transformation_id: usize,
     quantity: usize,
-    world: &VisibleWorld,
+    world: &World,
     work: &mut WorkCounter,
 ) -> Decision {
     work.exact_expansions += 1;
     work.economic_evaluations += 1;
-    work.fact_accesses += 5;
+    work.fact_accesses += 4;
 
-    oracle_candidate(transformation_id, quantity, world).decision()
+    oracle_decision(transformation_id, quantity, world)
 }
 
-fn run_oracle(world: &VisibleWorld) -> BTreeSet<CandidateKey> {
+fn run_oracle(world: &World) -> BTreeSet<CandidateKey> {
     let mut advances = BTreeSet::new();
 
-    for transformation_id in 0..world.transformation_count {
-        for quantity in world.min_quantity..=world.max_quantity {
-            let candidate = oracle_candidate(transformation_id, quantity, world);
-
-            if candidate.decision() == Decision::Advance {
-                advances.insert(candidate.key);
+    for transformation_id in 0..TRANSFORMATION_COUNT {
+        for quantity in MIN_QUANTITY..=MAX_QUANTITY {
+            if oracle_decision(transformation_id, quantity, world) == Decision::Advance {
+                advances.insert(CandidateKey {
+                    transformation_id,
+                    quantity,
+                });
             }
         }
     }
@@ -220,155 +233,89 @@ fn run_oracle(world: &VisibleWorld) -> BTreeSet<CandidateKey> {
     advances
 }
 
-fn run_baseline(world: &VisibleWorld) -> EngineResult {
-    let mut advances = BTreeSet::new();
-    let mut rejects = 0;
-    let mut work = WorkCounter::default();
+fn run_eager(world: &World) -> EngineResult {
+    let mut result = EngineResult {
+        advances: BTreeSet::new(),
+        rejects: 0,
+        work: WorkCounter::default(),
+    };
 
-    for transformation_id in 0..world.transformation_count {
-        for quantity in world.min_quantity..=world.max_quantity {
+    for transformation_id in 0..TRANSFORMATION_COUNT {
+        for quantity in MIN_QUANTITY..=MAX_QUANTITY {
             let key = CandidateKey {
                 transformation_id,
                 quantity,
             };
 
-            match evaluate_exact(transformation_id, quantity, world, &mut work) {
+            match evaluate_exact(transformation_id, quantity, world, &mut result.work) {
                 Decision::Advance => {
-                    advances.insert(key);
+                    result.advances.insert(key);
                 }
                 Decision::Reject => {
-                    rejects += 1;
+                    result.rejects += 1;
                 }
             }
         }
     }
 
-    EngineResult {
-        advances,
-        rejects,
-        work,
-    }
+    result
 }
 
-fn run_unsafe_coarse_merge(world: &VisibleWorld) -> UnsafeCoarseResult {
-    let mut advances = BTreeSet::new();
-    let mut rejects = 0;
-    let mut work = WorkCounter::default();
-
-    for transformation_id in 0..world.transformation_count {
-        if transformation_in_merge_region(transformation_id, world) {
-            continue;
-        }
-
-        for quantity in world.min_quantity..=world.max_quantity {
-            let key = CandidateKey {
-                transformation_id,
-                quantity,
-            };
-
-            match evaluate_exact(transformation_id, quantity, world, &mut work) {
-                Decision::Advance => {
-                    advances.insert(key);
-                }
-                Decision::Reject => {
-                    rejects += 1;
-                }
-            }
-        }
-    }
-
-    let merged_points = (world.merge_region_end - world.merge_region_start)
-        * (world.max_quantity - world.min_quantity + 1);
-
-    rejects += merged_points;
-
-    UnsafeCoarseResult {
-        advances,
-        rejects,
-        exact_expansions: work.exact_expansions,
-        merged_points,
-    }
-}
-
-fn family_crosses_id_boundary(family: CandidateFamily, boundary: usize) -> bool {
-    family.id_start < boundary && family.id_end > boundary
-}
-
-fn family_crosses_merge_start(family: CandidateFamily, world: &VisibleWorld) -> bool {
-    family_crosses_id_boundary(family, world.merge_region_start)
-}
-
-fn family_crosses_merge_end(family: CandidateFamily, world: &VisibleWorld) -> bool {
-    family_crosses_id_boundary(family, world.merge_region_end)
-}
-
-fn family_crosses_hidden_capability_boundary(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-) -> bool {
-    family_crosses_id_boundary(family, world.hidden_capability_boundary)
-}
-
-fn family_fully_in_merge_region(family: CandidateFamily, world: &VisibleWorld) -> bool {
-    family.id_start >= world.merge_region_start && family.id_end <= world.merge_region_end
-}
-
-fn family_fully_in_disabled_region(family: CandidateFamily, world: &VisibleWorld) -> bool {
-    family.id_start >= world.hidden_capability_boundary && family.id_end <= world.merge_region_end
-}
-
-fn family_evidence(family: CandidateFamily, world: &VisibleWorld) -> Evidence {
-    Evidence {
-        edge_adjustment: if family_fully_in_merge_region(family, world) {
-            MERGE_REGION_EDGE_ADJUSTMENT
-        } else {
-            0
-        },
-    }
-}
-
-fn optimistic_profit_at_quantity(quantity: usize, evidence: Evidence) -> i64 {
+fn optimistic_profit_at_quantity(quantity: usize, edge: i64) -> i64 {
     let quantity = quantity as i64;
-    let edge = MAX_EDGE + evidence.edge_adjustment;
 
-    quantity * edge - MIN_IMPACT * quantity * quantity - FIXED_COST
+    quantity * edge - IMPACT * quantity * quantity - FIXED_COST
 }
 
 fn family_optimistic_profit_upper_bound(
     family: CandidateFamily,
-    evidence: Evidence,
+    world: &World,
     work: &mut WorkCounter,
 ) -> i64 {
     work.family_evaluations += 1;
     work.economic_evaluations += 1;
     work.bound_evaluations += 1;
-    work.fact_accesses += 4;
+    work.fact_accesses += 3;
 
+    let (_, unknown_max) = unknown_bounds_for_family(family, world);
+    let edge = family_base_edge(family) + unknown_max;
     let first_quantity = family.quantity_start;
     let last_quantity = family.quantity_end - 1;
-    let optimistic_edge = MAX_EDGE + evidence.edge_adjustment;
-
-    let vertex_quantity = if optimistic_edge > 0 {
-        (optimistic_edge / (2 * MIN_IMPACT)).max(1) as usize
+    let vertex_quantity = if edge > 0 {
+        (edge / (2 * IMPACT)).max(1) as usize
     } else {
         first_quantity
     };
-
     let bounded_vertex = vertex_quantity.clamp(first_quantity, last_quantity);
 
-    let first_profit = optimistic_profit_at_quantity(first_quantity, evidence);
-    let last_profit = optimistic_profit_at_quantity(last_quantity, evidence);
-    let vertex_profit = optimistic_profit_at_quantity(bounded_vertex, evidence);
+    let first_profit = optimistic_profit_at_quantity(first_quantity, edge);
+    let last_profit = optimistic_profit_at_quantity(last_quantity, edge);
+    let vertex_profit = optimistic_profit_at_quantity(bounded_vertex, edge);
 
     first_profit.max(last_profit).max(vertex_profit)
 }
 
 fn family_proven_reject(
     family: CandidateFamily,
-    evidence: Evidence,
+    world: &World,
     work: &mut WorkCounter,
 ) -> bool {
-    family_optimistic_profit_upper_bound(family, evidence, work) <= 0
+    family_optimistic_profit_upper_bound(family, world, work) <= 0
+}
+
+fn family_crosses_boundary(family: CandidateFamily, boundary: usize) -> bool {
+    family.id_start < boundary && family.id_end > boundary
+}
+
+fn next_semantic_boundary(family: CandidateFamily) -> Option<usize> {
+    [
+        NOVELTY_REGION_START,
+        NOVELTY_REGION_END,
+        SENSITIVE_REGION_START,
+        SENSITIVE_REGION_END,
+    ]
+    .into_iter()
+    .find(|boundary| family_crosses_boundary(family, *boundary))
 }
 
 fn split_family_at_id(
@@ -394,63 +341,38 @@ fn split_family_at_id(
     )
 }
 
-fn split_family(family: CandidateFamily) -> (CandidateFamily, CandidateFamily) {
-    if family.id_len() >= family.quantity_len() && family.id_len() > 1 {
-        let midpoint = family.id_start + family.id_len() / 2;
+fn is_exact_novelty_family(family: CandidateFamily) -> bool {
+    family.id_start == NOVELTY_REGION_START && family.id_end == NOVELTY_REGION_END
+}
 
-        (
-            CandidateFamily {
-                id_start: family.id_start,
-                id_end: midpoint,
-                quantity_start: family.quantity_start,
-                quantity_end: family.quantity_end,
-            },
-            CandidateFamily {
-                id_start: midpoint,
-                id_end: family.id_end,
-                quantity_start: family.quantity_start,
-                quantity_end: family.quantity_end,
-            },
-        )
-    } else {
-        let midpoint = family.quantity_start + family.quantity_len() / 2;
+fn issue_phase_a_certificate() -> SafeIgnoranceCertificate {
+    let world = phase_a_world();
+    let family = CandidateFamily {
+        id_start: NOVELTY_REGION_START,
+        id_end: NOVELTY_REGION_END,
+        quantity_start: MIN_QUANTITY,
+        quantity_end: MAX_QUANTITY + 1,
+    };
+    let mut work = WorkCounter::default();
 
-        (
-            CandidateFamily {
-                id_start: family.id_start,
-                id_end: family.id_end,
-                quantity_start: family.quantity_start,
-                quantity_end: midpoint,
-            },
-            CandidateFamily {
-                id_start: family.id_start,
-                id_end: family.id_end,
-                quantity_start: midpoint,
-                quantity_end: family.quantity_end,
-            },
-        )
+    assert!(family_proven_reject(family, &world, &mut work));
+
+    SafeIgnoranceCertificate {
+        id_start: family.id_start,
+        id_end: family.id_end,
+        dependency_generation: world.novelty_generation,
+        decision: Decision::Reject,
     }
 }
 
-fn compression_certificate_allows_merge(
+fn cached_certificate_matches_family(
+    certificate: SafeIgnoranceCertificate,
     family: CandidateFamily,
-    world: &VisibleWorld,
-    work: &mut WorkCounter,
 ) -> bool {
-    work.compression_checks += 1;
-    work.fact_accesses += 2;
-
-    if family_fully_in_merge_region(family, world)
-        && family_crosses_hidden_capability_boundary(family, world)
-    {
-        work.dangerous_merges_refused += 1;
-        false
-    } else {
-        true
-    }
+    certificate.id_start == family.id_start && certificate.id_end == family.id_end
 }
 
-fn resolve_exact_family(family: CandidateFamily, world: &VisibleWorld, result: &mut EngineResult) {
+fn resolve_exact_family(family: CandidateFamily, world: &World, result: &mut EngineResult) {
     for transformation_id in family.id_start..family.id_end {
         for quantity in family.quantity_start..family.quantity_end {
             let key = CandidateKey {
@@ -470,73 +392,62 @@ fn resolve_exact_family(family: CandidateFamily, world: &VisibleWorld, result: &
     }
 }
 
-fn resolve_family(family: CandidateFamily, world: &VisibleWorld, result: &mut EngineResult) {
+fn resolve_family(
+    family: CandidateFamily,
+    world: &World,
+    cached_certificate: SafeIgnoranceCertificate,
+    result: &mut EngineResult,
+) {
     if family.is_empty() {
         return;
     }
 
-    if family_crosses_merge_start(family, world) {
+    if let Some(boundary) = next_semantic_boundary(family) {
         result.work.family_splits += 1;
         result.work.semantic_splits += 1;
 
-        let (left, right) = split_family_at_id(family, world.merge_region_start);
+        let (left, right) = split_family_at_id(family, boundary);
 
-        resolve_family(left, world, result);
-        resolve_family(right, world, result);
+        resolve_family(left, world, cached_certificate, result);
+        resolve_family(right, world, cached_certificate, result);
         return;
     }
 
-    if family_crosses_merge_end(family, world) {
-        result.work.family_splits += 1;
-        result.work.semantic_splits += 1;
+    if is_exact_novelty_family(family)
+        && cached_certificate_matches_family(cached_certificate, family)
+    {
+        result.work.certificate_checks += 1;
+        result.work.fact_accesses += 1;
 
-        let (left, right) = split_family_at_id(family, world.merge_region_end);
+        if cached_certificate.dependency_generation == world.novelty_generation
+            && cached_certificate.decision == Decision::Reject
+        {
+            result.rejects += family.point_count();
+            result.work.family_rejections += 1;
+            result.work.certificates_reused += 1;
+            return;
+        }
 
-        resolve_family(left, world, result);
-        resolve_family(right, world, result);
-        return;
+        result.work.certificates_invalidated += 1;
+        result.work.reactivated_points += family.point_count() as u64;
     }
 
-    if !compression_certificate_allows_merge(family, world, &mut result.work) {
-        result.work.family_splits += 1;
-        result.work.semantic_splits += 1;
+    result.work.certificate_checks += 1;
 
-        let (left, right) = split_family_at_id(family, world.hidden_capability_boundary);
-
-        resolve_family(left, world, result);
-        resolve_family(right, world, result);
-        return;
-    }
-
-    if family_fully_in_disabled_region(family, world) {
+    if family_proven_reject(family, world, &mut result.work) {
         result.rejects += family.point_count();
         result.work.family_rejections += 1;
-        result.work.capability_family_rejections += 1;
+        result.work.certificates_issued += 1;
         return;
     }
 
-    let evidence = family_evidence(family, world);
-
-    if family_proven_reject(family, evidence, &mut result.work) {
-        result.rejects += family.point_count();
-        result.work.family_rejections += 1;
-        return;
-    }
-
-    if family.point_count() <= EXACT_FAMILY_POINT_LIMIT {
-        resolve_exact_family(family, world, result);
-        return;
-    }
-
-    result.work.family_splits += 1;
-
-    let (left, right) = split_family(family);
-
-    resolve_family(left, world, result);
-    resolve_family(right, world, result);
+    resolve_exact_family(family, world, result);
 }
 
-fn run_pulse(world: &VisibleWorld) -> EngineResult {
+fn run_pulse(
+    world: &World,
+    cached_certificate: SafeIgnoranceCertificate,
+) -> EngineResult {
     let mut result = EngineResult {
         advances: BTreeSet::new(),
         rejects: 0,
@@ -545,33 +456,66 @@ fn run_pulse(world: &VisibleWorld) -> EngineResult {
 
     let root = CandidateFamily {
         id_start: 0,
-        id_end: world.transformation_count,
-        quantity_start: world.min_quantity,
-        quantity_end: world.max_quantity + 1,
+        id_end: TRANSFORMATION_COUNT,
+        quantity_start: MIN_QUANTITY,
+        quantity_end: MAX_QUANTITY + 1,
     };
 
-    resolve_family(root, world, &mut result);
+    resolve_family(root, world, cached_certificate, &mut result);
 
     result
 }
 
-fn coarse_signature_collapses_merge_region(world: &VisibleWorld) -> bool {
-    let first = current_evidence_for_candidate(world.merge_region_start, world);
-    let last = current_evidence_for_candidate(world.merge_region_end - 1, world);
+fn run_unsafe_stale_suppression(
+    world: &World,
+    stale_certificate: SafeIgnoranceCertificate,
+) -> UnsafeResult {
+    let mut advances = BTreeSet::new();
+    let mut rejects = 0;
+    let mut exact_expansions = 0;
 
-    let first_capability = transformation_execution_enabled(world.merge_region_start, world);
-    let last_capability = transformation_execution_enabled(world.merge_region_end - 1, world);
+    for transformation_id in 0..TRANSFORMATION_COUNT {
+        if transformation_id >= stale_certificate.id_start
+            && transformation_id < stale_certificate.id_end
+            && stale_certificate.decision == Decision::Reject
+        {
+            rejects += MAX_QUANTITY - MIN_QUANTITY + 1;
+            continue;
+        }
 
-    first.edge_adjustment == last.edge_adjustment && first_capability != last_capability
+        for quantity in MIN_QUANTITY..=MAX_QUANTITY {
+            exact_expansions += 1;
+            let key = CandidateKey {
+                transformation_id,
+                quantity,
+            };
+
+            match oracle_decision(transformation_id, quantity, world) {
+                Decision::Advance => {
+                    advances.insert(key);
+                }
+                Decision::Reject => {
+                    rejects += 1;
+                }
+            }
+        }
+    }
+
+    UnsafeResult {
+        advances,
+        rejects,
+        exact_expansions,
+        stale_suppressed_points: (stale_certificate.id_end - stale_certificate.id_start)
+            * (MAX_QUANTITY - MIN_QUANTITY + 1),
+    }
 }
 
-fn enabled_merge_region_advance_count(world: &VisibleWorld) -> usize {
+fn novelty_region_advance_count(world: &World) -> usize {
     let mut count = 0;
 
-    for transformation_id in world.merge_region_start..world.hidden_capability_boundary {
-        for quantity in world.min_quantity..=world.max_quantity {
-            if oracle_candidate(transformation_id, quantity, world).decision() == Decision::Advance
-            {
+    for transformation_id in NOVELTY_REGION_START..NOVELTY_REGION_END {
+        for quantity in MIN_QUANTITY..=MAX_QUANTITY {
+            if oracle_decision(transformation_id, quantity, world) == Decision::Advance {
                 count += 1;
             }
         }
@@ -580,196 +524,181 @@ fn enabled_merge_region_advance_count(world: &VisibleWorld) -> usize {
     count
 }
 
-fn disabled_positive_economics_count(world: &VisibleWorld) -> usize {
-    let mut count = 0;
+fn phase_a_certificate_is_valid(certificate: SafeIgnoranceCertificate) -> bool {
+    let world = phase_a_world();
+    let family = CandidateFamily {
+        id_start: certificate.id_start,
+        id_end: certificate.id_end,
+        quantity_start: MIN_QUANTITY,
+        quantity_end: MAX_QUANTITY + 1,
+    };
+    let mut work = WorkCounter::default();
 
-    for transformation_id in world.hidden_capability_boundary..world.merge_region_end {
-        let evidence = current_evidence_for_candidate(transformation_id, world);
-
-        for quantity in world.min_quantity..=world.max_quantity {
-            if candidate_profit(transformation_id, quantity, evidence) > 0 {
-                count += 1;
-            }
-        }
-    }
-
-    count
+    cached_certificate_matches_family(certificate, family)
+        && certificate.dependency_generation == world.novelty_generation
+        && certificate.decision == Decision::Reject
+        && family_proven_reject(family, &world, &mut work)
 }
 
-fn dangerous_false_merge_fixture_is_valid(world: &VisibleWorld) -> bool {
-    world.merge_region_start < world.hidden_capability_boundary
-        && world.hidden_capability_boundary < world.merge_region_end
-        && coarse_signature_collapses_merge_region(world)
-        && enabled_merge_region_advance_count(world) > 0
-        && disabled_positive_economics_count(world) > 0
+fn novelty_break_is_decision_relevant() -> bool {
+    let phase_a = phase_a_world();
+    let phase_b = phase_b_world();
+
+    novelty_region_advance_count(&phase_a) == 0 && novelty_region_advance_count(&phase_b) > 0
 }
 
 fn print_work(label: &str, work: &WorkCounter) {
     println!("{label}");
+    println!("  family evaluations:       {}", work.family_evaluations);
+    println!("  family splits:            {}", work.family_splits);
+    println!("  semantic splits:          {}", work.semantic_splits);
+    println!("  family rejections:        {}", work.family_rejections);
+    println!("  exact expansions:         {}", work.exact_expansions);
     println!(
-        "  family evaluations:             {}",
-        work.family_evaluations
-    );
-    println!("  family splits:                  {}", work.family_splits);
-    println!("  semantic splits:                {}", work.semantic_splits);
-    println!(
-        "  family rejections:              {}",
-        work.family_rejections
-    );
-    println!(
-        "  capability family rejections:   {}",
-        work.capability_family_rejections
-    );
-    println!(
-        "  exact expansions:               {}",
-        work.exact_expansions
-    );
-    println!(
-        "  economic evaluations:           {}",
+        "  economic evaluations:     {}",
         work.economic_evaluations
     );
+    println!("  bound evaluations:        {}", work.bound_evaluations);
+    println!("  fact accesses:            {}", work.fact_accesses);
+    println!("  certificate checks:       {}", work.certificate_checks);
+    println!("  certificates issued:      {}", work.certificates_issued);
+    println!("  certificates reused:      {}", work.certificates_reused);
     println!(
-        "  bound evaluations:              {}",
-        work.bound_evaluations
+        "  certificates invalidated: {}",
+        work.certificates_invalidated
     );
-    println!("  fact accesses:                   {}", work.fact_accesses);
     println!(
-        "  compression checks:             {}",
-        work.compression_checks
-    );
-    println!(
-        "  dangerous merges refused:       {}",
-        work.dangerous_merges_refused
+        "  reactivated points:       {}",
+        work.reactivated_points
     );
 }
 
 fn main() {
     println!("Pulse Field Lab");
-    println!("EZ-M0A — Representation Compression");
+    println!("EZ-M0A — Compression Without Loss");
     println!();
 
-    let world = visible_world();
-    let oracle = run_oracle(&world);
-    let baseline = run_baseline(&world);
-    let unsafe_coarse = run_unsafe_coarse_merge(&world);
-    let pulse = run_pulse(&world);
+    let phase_a = phase_a_world();
+    let phase_b = phase_b_world();
+    let certificate = issue_phase_a_certificate();
 
-    let total_candidate_states =
-        world.transformation_count * (world.max_quantity - world.min_quantity + 1);
+    let oracle_a = run_oracle(&phase_a);
+    let oracle_b = run_oracle(&phase_b);
+    let eager_b = run_eager(&phase_b);
+    let unsafe_b = run_unsafe_stale_suppression(&phase_b, certificate);
+    let pulse_b = run_pulse(&phase_b, certificate);
 
-    let fixture_valid = dangerous_false_merge_fixture_is_valid(&world);
+    let total_candidate_states = TRANSFORMATION_COUNT * (MAX_QUANTITY - MIN_QUANTITY + 1);
+    let phase_a_certificate_valid = phase_a_certificate_is_valid(certificate);
+    let novelty_break_relevant = novelty_break_is_decision_relevant();
+    let novelty_advances_a = novelty_region_advance_count(&phase_a);
+    let novelty_advances_b = novelty_region_advance_count(&phase_b);
 
-    let enabled_merge_advances = enabled_merge_region_advance_count(&world);
+    let unsafe_false_suppressions = oracle_b.difference(&unsafe_b.advances).count();
+    let unsafe_false_advances = unsafe_b.advances.difference(&oracle_b).count();
 
-    let disabled_positive_economics = disabled_positive_economics_count(&world);
+    let eager_matches_oracle = eager_b.advances == oracle_b;
+    let pulse_matches_oracle = pulse_b.advances == oracle_b;
+    let decision_agreement = eager_b.advances == pulse_b.advances;
+    let false_suppressions = oracle_b.difference(&pulse_b.advances).count();
+    let false_advances = pulse_b.advances.difference(&oracle_b).count();
 
-    let unsafe_false_prunes = oracle.difference(&unsafe_coarse.advances).count();
-
-    let unsafe_false_advances = unsafe_coarse.advances.difference(&oracle).count();
-
-    let baseline_matches_oracle = baseline.advances == oracle;
-    let pulse_matches_oracle = pulse.advances == oracle;
-    let decision_agreement = baseline.advances == pulse.advances;
-
-    let false_important_prunes = oracle.difference(&pulse.advances).count();
-
-    let false_advances = pulse.advances.difference(&oracle).count();
-
-    println!("Fixture: EZ-007 — Dangerous False Merge");
+    println!("Fixture: EZ-008 — Safe Ignorance");
     println!("Total candidate states: {total_candidate_states}");
     println!(
-        "Merge region: {}..{}",
-        world.merge_region_start, world.merge_region_end
+        "Novelty region: {}..{}",
+        NOVELTY_REGION_START, NOVELTY_REGION_END
     );
     println!(
-        "Hidden capability boundary: {}",
-        world.hidden_capability_boundary
+        "Sensitive region: {}..{}",
+        SENSITIVE_REGION_START, SENSITIVE_REGION_END
     );
     println!(
-        "Coarse signature collapses merge region: {}",
-        coarse_signature_collapses_merge_region(&world)
+        "Phase A novelty generation: {}",
+        phase_a.novelty_generation
     );
-    println!("Enabled-side Oracle ADVANCE count: {enabled_merge_advances}");
     println!(
-        "Disabled-side positive economics count: \
-         {disabled_positive_economics}"
+        "Phase B novelty generation: {}",
+        phase_b.novelty_generation
     );
-    println!("Dangerous false-merge fixture valid: {fixture_valid}");
-    println!("Oracle ADVANCE count: {}", oracle.len());
+    println!("Phase A Safe Ignorance certificate valid: {phase_a_certificate_valid}");
+    println!("Novelty break is decision relevant: {novelty_break_relevant}");
+    println!("Phase A novelty-region ADVANCE count: {novelty_advances_a}");
+    println!("Phase B novelty-region ADVANCE count: {novelty_advances_b}");
+    println!("Phase A Oracle ADVANCE count: {}", oracle_a.len());
+    println!("Phase B Oracle ADVANCE count: {}", oracle_b.len());
     println!();
 
-    println!("Unsafe coarse merger");
+    println!("Unsafe stale-certificate suppression");
     println!(
-        "  merged points without distinction: {}",
-        unsafe_coarse.merged_points
+        "  stale-suppressed points: {}",
+        unsafe_b.stale_suppressed_points
     );
+    println!("  exact expansions:        {}", unsafe_b.exact_expansions);
+    println!("  ADVANCE:                 {}", unsafe_b.advances.len());
+    println!("  REJECT:                  {}", unsafe_b.rejects);
     println!(
-        "  exact expansions:                 {}",
-        unsafe_coarse.exact_expansions
+        "  execution-relevant false suppression: {unsafe_false_suppressions}"
     );
-    println!(
-        "  ADVANCE:                          {}",
-        unsafe_coarse.advances.len()
-    );
-    println!(
-        "  REJECT:                           {}",
-        unsafe_coarse.rejects
-    );
-    println!("  economically important false prunes: {unsafe_false_prunes}");
     println!("  false advances:                      {unsafe_false_advances}");
     println!();
 
     println!("Correctness");
-    println!("  baseline matches oracle: {baseline_matches_oracle}");
-    println!("  pulse matches oracle:    {pulse_matches_oracle}");
-    println!("  decision agreement:      {decision_agreement}");
-    println!("  false important prunes:  {false_important_prunes}");
-    println!("  false advances:          {false_advances}");
+    println!("  eager matches oracle: {eager_matches_oracle}");
+    println!("  pulse matches oracle: {pulse_matches_oracle}");
+    println!("  decision agreement:   {decision_agreement}");
+    println!("  false suppression:    {false_suppressions}");
+    println!("  false advances:       {false_advances}");
     println!(
-        "  dangerous merges refused: {}",
-        pulse.work.dangerous_merges_refused
+        "  certificates invalidated: {}",
+        pulse_b.work.certificates_invalidated
+    );
+    println!(
+        "  reactivated points:       {}",
+        pulse_b.work.reactivated_points
     );
     println!();
 
     println!("Decisions");
-    println!("  baseline ADVANCE: {}", baseline.advances.len());
-    println!("  baseline REJECT:  {}", baseline.rejects);
-    println!("  pulse ADVANCE:    {}", pulse.advances.len());
-    println!("  pulse REJECT:     {}", pulse.rejects);
+    println!("  eager ADVANCE: {}", eager_b.advances.len());
+    println!("  eager REJECT:  {}", eager_b.rejects);
+    println!("  pulse ADVANCE: {}", pulse_b.advances.len());
+    println!("  pulse REJECT:  {}", pulse_b.rejects);
     println!();
 
-    print_work("Baseline work", &baseline.work);
+    print_work("Eager work", &eager_b.work);
     println!();
-    print_work("Pulse work", &pulse.work);
+    print_work("Pulse work", &pulse_b.work);
     println!();
 
-    let baseline_expansions = baseline.work.exact_expansions as f64;
-    let pulse_expansions = pulse.work.exact_expansions as f64;
-
+    let eager_expansions = eager_b.work.exact_expansions as f64;
+    let pulse_expansions = pulse_b.work.exact_expansions as f64;
     let expansion_reduction =
-        100.0 * (baseline_expansions - pulse_expansions) / baseline_expansions;
+        100.0 * (eager_expansions - pulse_expansions) / eager_expansions;
 
     println!("Exact expansion reduction: {:.2}%", expansion_reduction);
 
-    let passed = fixture_valid
-        && unsafe_false_prunes > 0
+    let passed = phase_a_certificate_valid
+        && novelty_break_relevant
+        && unsafe_false_suppressions > 0
         && unsafe_false_advances == 0
-        && pulse.work.dangerous_merges_refused > 0
-        && pulse.work.capability_family_rejections > 0
-        && baseline_matches_oracle
+        && eager_matches_oracle
         && pulse_matches_oracle
         && decision_agreement
-        && false_important_prunes == 0
+        && false_suppressions == 0
         && false_advances == 0
-        && baseline.rejects == pulse.rejects
-        && pulse.work.exact_expansions < baseline.work.exact_expansions;
+        && eager_b.rejects == pulse_b.rejects
+        && pulse_b.work.certificates_invalidated > 0
+        && pulse_b.work.reactivated_points > 0
+        && pulse_b.work.certificates_issued > 0
+        && pulse_b.work.exact_expansions < eager_b.work.exact_expansions;
 
     println!();
 
     if passed {
-        println!("EZ-007 CORRECTNESS GATE: PASS");
+        println!("EZ-008 CORRECTNESS GATE: PASS");
     } else {
-        println!("EZ-007 CORRECTNESS GATE: FAIL");
+        println!("EZ-008 CORRECTNESS GATE: FAIL");
         std::process::exit(1);
     }
 }
