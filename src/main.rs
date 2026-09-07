@@ -2,22 +2,23 @@ const TRANSFORMATION_COUNT: usize = 100;
 const MIN_QUANTITY: usize = 1;
 const MAX_QUANTITY: usize = 100;
 
-const ALPHA_REGION_START: usize = 20;
-const ALPHA_REGION_END: usize = 40;
-const BETA_REGION_START: usize = 30;
-const BETA_REGION_END: usize = 50;
+const FAST_REGION_START: usize = 20;
+const FAST_REGION_END: usize = 30;
+const SLOW_REGION_START: usize = 40;
+const SLOW_REGION_END: usize = 60;
 
-const DEFAULT_BASE_EDGE: i64 = 10;
-const DEPENDENCY_BASE_EDGE: i64 = 18;
+const OBSERVED_SLOT: u64 = 100;
+const FAST_VALID_UNTIL_SLOT: u64 = 120;
+const SLOW_VALID_UNTIL_SLOT: u64 = 180;
+const GLOBAL_TTL_20_VALID_UNTIL_SLOT: u64 = 120;
+const GLOBAL_TTL_50_VALID_UNTIL_SLOT: u64 = 150;
+const CHECKPOINTS: [u64; 6] = [119, 120, 121, 179, 180, 181];
+
+const UNAFFECTED_EDGE: i64 = 10;
+const ACTIVE_EDGE: i64 = 102;
+const INACTIVE_EDGE: i64 = 0;
 const FIXED_COST: i64 = 100;
 const IMPACT: i64 = 1;
-
-const GENERATION_ONE: u64 = 1;
-const GENERATION_TWO: u64 = 2;
-const GENERATION_THREE: u64 = 3;
-
-const ALPHA_SHIFT: i64 = 4;
-const BETA_SHIFT: i64 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Decision {
@@ -26,24 +27,10 @@ enum Decision {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FragmentKind {
-    Alpha,
-    Beta,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct World {
-    generation: u64,
-    alpha_adjustment: i64,
-    beta_adjustment: i64,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ProofFragment {
-    kind: FragmentKind,
-    generation: u64,
-    adjustment: i64,
-    canonical: bool,
+enum TemporalKind {
+    Down,
+    Up,
+    Unaffected,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -51,50 +38,34 @@ struct CacheEntry {
     transformation_id: usize,
     quantity: usize,
     decision: Decision,
+    digest: u64,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, Copy)]
+struct PulseCacheEntry {
+    public: CacheEntry,
+    valid_until_slot: Option<u64>,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
 struct WorkCounter {
-    exact_expansions: u64,
+    exact_recomputations: u64,
     economic_evaluations: u64,
-    fact_accesses: u64,
     cache_checks: u64,
     cache_reuses: u64,
-    dependency_synchronizations: u64,
-    coherence_checks: u64,
-    proof_compositions: u64,
-    incompatible_compositions_refused: u64,
-    coherence_reactivations: u64,
+    temporal_checks: u64,
 }
 
-#[derive(Debug)]
-struct RunResult {
-    decisions: Vec<Decision>,
+#[derive(Debug, Default, Clone, Copy)]
+struct ErrorCounter {
+    false_authorizations: u64,
+    false_rejects: u64,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct AggregateResult {
     work: WorkCounter,
-}
-
-fn generation_one_world() -> World {
-    World {
-        generation: GENERATION_ONE,
-        alpha_adjustment: 0,
-        beta_adjustment: 0,
-    }
-}
-
-fn generation_two_world() -> World {
-    World {
-        generation: GENERATION_TWO,
-        alpha_adjustment: ALPHA_SHIFT,
-        beta_adjustment: 0,
-    }
-}
-
-fn generation_three_world() -> World {
-    World {
-        generation: GENERATION_THREE,
-        alpha_adjustment: 0,
-        beta_adjustment: BETA_SHIFT,
-    }
+    errors: ErrorCounter,
 }
 
 fn total_candidate_states() -> usize {
@@ -105,241 +76,184 @@ fn in_region(transformation_id: usize, start: usize, end: usize) -> bool {
     (start..end).contains(&transformation_id)
 }
 
-fn is_alpha_dependent(transformation_id: usize) -> bool {
-    in_region(transformation_id, ALPHA_REGION_START, ALPHA_REGION_END)
+fn is_fast_region(transformation_id: usize) -> bool {
+    in_region(transformation_id, FAST_REGION_START, FAST_REGION_END)
 }
 
-fn is_beta_dependent(transformation_id: usize) -> bool {
-    in_region(transformation_id, BETA_REGION_START, BETA_REGION_END)
+fn is_slow_region(transformation_id: usize) -> bool {
+    in_region(transformation_id, SLOW_REGION_START, SLOW_REGION_END)
 }
 
-fn is_dependency_region(transformation_id: usize) -> bool {
-    is_alpha_dependent(transformation_id) || is_beta_dependent(transformation_id)
+fn is_time_sensitive(transformation_id: usize) -> bool {
+    is_fast_region(transformation_id) || is_slow_region(transformation_id)
 }
 
-fn is_overlap_region(transformation_id: usize) -> bool {
-    is_alpha_dependent(transformation_id) && is_beta_dependent(transformation_id)
-}
-
-fn base_edge(transformation_id: usize) -> i64 {
-    if is_dependency_region(transformation_id) {
-        DEPENDENCY_BASE_EDGE
+fn temporal_kind(transformation_id: usize) -> TemporalKind {
+    if is_fast_region(transformation_id) {
+        if transformation_id < FAST_REGION_START + (FAST_REGION_END - FAST_REGION_START) / 2 {
+            TemporalKind::Down
+        } else {
+            TemporalKind::Up
+        }
+    } else if is_slow_region(transformation_id) {
+        if transformation_id < SLOW_REGION_START + (SLOW_REGION_END - SLOW_REGION_START) / 2 {
+            TemporalKind::Down
+        } else {
+            TemporalKind::Up
+        }
     } else {
-        DEFAULT_BASE_EDGE
+        TemporalKind::Unaffected
     }
 }
 
-fn world_adjustment(transformation_id: usize, world: &World) -> i64 {
-    let mut adjustment = 0;
-
-    if is_alpha_dependent(transformation_id) {
-        adjustment += world.alpha_adjustment;
+fn valid_until_slot(transformation_id: usize) -> Option<u64> {
+    if is_fast_region(transformation_id) {
+        Some(FAST_VALID_UNTIL_SLOT)
+    } else if is_slow_region(transformation_id) {
+        Some(SLOW_VALID_UNTIL_SLOT)
+    } else {
+        None
     }
-
-    if is_beta_dependent(transformation_id) {
-        adjustment += world.beta_adjustment;
-    }
-
-    adjustment
 }
 
-fn profit_from_adjustment(transformation_id: usize, quantity: usize, adjustment: i64) -> i64 {
+fn state_digest(transformation_id: usize, quantity: usize) -> u64 {
+    let transformation = transformation_id as u64 + 1;
+    let quantity = quantity as u64;
+    transformation
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .rotate_left(17)
+        ^ quantity.wrapping_mul(0xD6E8_FEB8_6659_FD93)
+}
+
+fn edge_for_state(transformation_id: usize, current_protocol_slot: u64) -> i64 {
+    match temporal_kind(transformation_id) {
+        TemporalKind::Unaffected => UNAFFECTED_EDGE,
+        TemporalKind::Down => {
+            let valid_until = valid_until_slot(transformation_id)
+                .expect("time-sensitive Down state must have a validity bound");
+            if current_protocol_slot <= valid_until {
+                ACTIVE_EDGE
+            } else {
+                INACTIVE_EDGE
+            }
+        }
+        TemporalKind::Up => {
+            let valid_until = valid_until_slot(transformation_id)
+                .expect("time-sensitive Up state must have a validity bound");
+            if current_protocol_slot <= valid_until {
+                INACTIVE_EDGE
+            } else {
+                ACTIVE_EDGE
+            }
+        }
+    }
+}
+
+fn profit(transformation_id: usize, quantity: usize, current_protocol_slot: u64) -> i64 {
     let quantity = quantity as i64;
-    let edge = base_edge(transformation_id) + adjustment;
-
+    let edge = edge_for_state(transformation_id, current_protocol_slot);
     quantity * edge - IMPACT * quantity * quantity - FIXED_COST
 }
 
-fn decision_from_adjustment(
+fn oracle_decision(
     transformation_id: usize,
     quantity: usize,
-    adjustment: i64,
+    current_protocol_slot: u64,
 ) -> Decision {
-    if profit_from_adjustment(transformation_id, quantity, adjustment) > 0 {
+    if profit(transformation_id, quantity, current_protocol_slot) > 0 {
         Decision::Advance
     } else {
         Decision::Reject
     }
 }
 
-fn oracle_decision(transformation_id: usize, quantity: usize, world: &World) -> Decision {
-    decision_from_adjustment(
-        transformation_id,
-        quantity,
-        world_adjustment(transformation_id, world),
-    )
-}
-
 fn evaluate_exact(
     transformation_id: usize,
     quantity: usize,
-    world: &World,
+    current_protocol_slot: u64,
     work: &mut WorkCounter,
 ) -> Decision {
-    work.exact_expansions += 1;
+    work.exact_recomputations += 1;
     work.economic_evaluations += 1;
-    work.fact_accesses += 3;
-
-    oracle_decision(transformation_id, quantity, world)
+    oracle_decision(transformation_id, quantity, current_protocol_slot)
 }
 
-fn run_oracle(world: &World) -> Vec<Decision> {
+fn run_oracle(current_protocol_slot: u64) -> Vec<Decision> {
     let mut decisions = Vec::with_capacity(total_candidate_states());
 
     for transformation_id in 0..TRANSFORMATION_COUNT {
         for quantity in MIN_QUANTITY..=MAX_QUANTITY {
-            decisions.push(oracle_decision(transformation_id, quantity, world));
+            decisions.push(oracle_decision(
+                transformation_id,
+                quantity,
+                current_protocol_slot,
+            ));
         }
     }
 
     decisions
 }
 
-fn build_current_cache(world: &World) -> (Vec<CacheEntry>, WorkCounter) {
-    let mut cache = Vec::with_capacity(total_candidate_states());
-    let mut work = WorkCounter::default();
+fn build_slot_100_cache() -> (Vec<CacheEntry>, Vec<PulseCacheEntry>) {
+    let mut public_cache = Vec::with_capacity(total_candidate_states());
+    let mut pulse_cache = Vec::with_capacity(total_candidate_states());
 
     for transformation_id in 0..TRANSFORMATION_COUNT {
         for quantity in MIN_QUANTITY..=MAX_QUANTITY {
-            let decision = evaluate_exact(transformation_id, quantity, world, &mut work);
-
-            cache.push(CacheEntry {
+            let public = CacheEntry {
                 transformation_id,
                 quantity,
-                decision,
+                decision: oracle_decision(transformation_id, quantity, OBSERVED_SLOT),
+                digest: state_digest(transformation_id, quantity),
+            };
+
+            public_cache.push(public);
+            pulse_cache.push(PulseCacheEntry {
+                public,
+                valid_until_slot: valid_until_slot(transformation_id),
             });
         }
     }
 
-    (cache, work)
+    (public_cache, pulse_cache)
 }
 
-fn run_global_recompute(world: &World) -> RunResult {
-    let mut decisions = Vec::with_capacity(total_candidate_states());
-    let mut work = WorkCounter::default();
-
-    for transformation_id in 0..TRANSFORMATION_COUNT {
-        for quantity in MIN_QUANTITY..=MAX_QUANTITY {
-            decisions.push(evaluate_exact(
-                transformation_id,
-                quantity,
-                world,
-                &mut work,
-            ));
-        }
-    }
-
-    RunResult { decisions, work }
-}
-
-fn run_dependency_only(cache: &[CacheEntry], world: &World) -> RunResult {
-    let mut decisions = Vec::with_capacity(cache.len());
-    let mut work = WorkCounter::default();
-
+fn assert_cache_integrity(cache: &[CacheEntry]) {
     for entry in cache {
-        work.cache_checks += 1;
+        assert_eq!(
+            entry.digest,
+            state_digest(entry.transformation_id, entry.quantity)
+        );
+    }
+}
 
-        if is_dependency_region(entry.transformation_id) {
-            work.dependency_synchronizations += 1;
-            decisions.push(evaluate_exact(
-                entry.transformation_id,
-                entry.quantity,
-                world,
-                &mut work,
-            ));
-        } else {
-            work.cache_reuses += 1;
-            decisions.push(entry.decision);
+fn mismatch_counts(reference: &[Decision], candidate: &[Decision]) -> ErrorCounter {
+    assert_eq!(reference.len(), candidate.len());
+
+    let mut errors = ErrorCounter::default();
+
+    for (expected, actual) in reference.iter().zip(candidate) {
+        match (*expected, *actual) {
+            (Decision::Reject, Decision::Advance) => errors.false_authorizations += 1,
+            (Decision::Advance, Decision::Reject) => errors.false_rejects += 1,
+            _ => {}
         }
     }
 
-    RunResult { decisions, work }
+    errors
 }
 
-fn fragments_individually_canonical(
-    alpha_fragment: ProofFragment,
-    beta_fragment: ProofFragment,
-) -> bool {
-    alpha_fragment.canonical
-        && beta_fragment.canonical
-        && alpha_fragment.kind == FragmentKind::Alpha
-        && beta_fragment.kind == FragmentKind::Beta
+fn add_work(total: &mut WorkCounter, current: WorkCounter) {
+    total.exact_recomputations += current.exact_recomputations;
+    total.economic_evaluations += current.economic_evaluations;
+    total.cache_checks += current.cache_checks;
+    total.cache_reuses += current.cache_reuses;
+    total.temporal_checks += current.temporal_checks;
 }
 
-fn fragments_jointly_coherent(alpha_fragment: ProofFragment, beta_fragment: ProofFragment) -> bool {
-    fragments_individually_canonical(alpha_fragment, beta_fragment)
-        && alpha_fragment.generation == beta_fragment.generation
-}
-
-fn run_unsafe_frankenstein(
-    cache: &[CacheEntry],
-    alpha_fragment: ProofFragment,
-    beta_fragment: ProofFragment,
-) -> RunResult {
-    let mut decisions = Vec::with_capacity(cache.len());
-    let mut work = WorkCounter::default();
-
-    for entry in cache {
-        work.cache_checks += 1;
-
-        if is_overlap_region(entry.transformation_id) {
-            work.proof_compositions += 1;
-            let fabricated_adjustment = alpha_fragment.adjustment + beta_fragment.adjustment;
-            decisions.push(decision_from_adjustment(
-                entry.transformation_id,
-                entry.quantity,
-                fabricated_adjustment,
-            ));
-        } else {
-            work.cache_reuses += 1;
-            decisions.push(entry.decision);
-        }
-    }
-
-    RunResult { decisions, work }
-}
-
-fn run_pulse(
-    cache: &[CacheEntry],
-    current_world: &World,
-    alpha_fragment: ProofFragment,
-    beta_fragment: ProofFragment,
-) -> RunResult {
-    let mut decisions = Vec::with_capacity(cache.len());
-    let mut work = WorkCounter::default();
-
-    for entry in cache {
-        work.cache_checks += 1;
-
-        if !is_overlap_region(entry.transformation_id) {
-            work.cache_reuses += 1;
-            decisions.push(entry.decision);
-            continue;
-        }
-
-        work.coherence_checks += 1;
-
-        if fragments_jointly_coherent(alpha_fragment, beta_fragment) {
-            work.proof_compositions += 1;
-            let composed_adjustment = alpha_fragment.adjustment + beta_fragment.adjustment;
-            decisions.push(decision_from_adjustment(
-                entry.transformation_id,
-                entry.quantity,
-                composed_adjustment,
-            ));
-        } else {
-            work.incompatible_compositions_refused += 1;
-            work.coherence_reactivations += 1;
-            decisions.push(evaluate_exact(
-                entry.transformation_id,
-                entry.quantity,
-                current_world,
-                &mut work,
-            ));
-        }
-    }
-
-    RunResult { decisions, work }
+fn add_errors(total: &mut ErrorCounter, current: ErrorCounter) {
+    total.false_authorizations += current.false_authorizations;
+    total.false_rejects += current.false_rejects;
 }
 
 fn advance_count(decisions: &[Decision]) -> usize {
@@ -349,321 +263,430 @@ fn advance_count(decisions: &[Decision]) -> usize {
         .count()
 }
 
-fn overlap_advance_count(decisions: &[Decision]) -> usize {
-    let mut count = 0;
-    let mut index = 0;
+fn run_global_recompute(current_protocol_slot: u64) -> (Vec<Decision>, WorkCounter) {
+    let mut decisions = Vec::with_capacity(total_candidate_states());
+    let mut work = WorkCounter::default();
 
     for transformation_id in 0..TRANSFORMATION_COUNT {
-        for _quantity in MIN_QUANTITY..=MAX_QUANTITY {
-            if is_overlap_region(transformation_id) && decisions[index] == Decision::Advance {
-                count += 1;
+        for quantity in MIN_QUANTITY..=MAX_QUANTITY {
+            decisions.push(evaluate_exact(
+                transformation_id,
+                quantity,
+                current_protocol_slot,
+                &mut work,
+            ));
+        }
+    }
+
+    (decisions, work)
+}
+
+fn run_byte_only(cache: &[CacheEntry]) -> (Vec<Decision>, WorkCounter) {
+    let mut decisions = Vec::with_capacity(cache.len());
+    let mut work = WorkCounter::default();
+
+    for entry in cache {
+        work.cache_checks += 1;
+        work.cache_reuses += 1;
+        decisions.push(entry.decision);
+    }
+
+    (decisions, work)
+}
+
+fn run_global_ttl(
+    cache: &[CacheEntry],
+    current_protocol_slot: u64,
+    global_valid_until_slot: u64,
+) -> (Vec<Decision>, WorkCounter) {
+    let mut decisions = Vec::with_capacity(cache.len());
+    let mut work = WorkCounter::default();
+
+    for entry in cache {
+        work.cache_checks += 1;
+
+        if is_time_sensitive(entry.transformation_id)
+            && current_protocol_slot > global_valid_until_slot
+        {
+            decisions.push(evaluate_exact(
+                entry.transformation_id,
+                entry.quantity,
+                current_protocol_slot,
+                &mut work,
+            ));
+        } else {
+            work.cache_reuses += 1;
+            decisions.push(entry.decision);
+        }
+    }
+
+    (decisions, work)
+}
+
+fn run_cached_advance_only(
+    cache: &[CacheEntry],
+    current_protocol_slot: u64,
+) -> (Vec<Decision>, WorkCounter) {
+    let mut decisions = Vec::with_capacity(cache.len());
+    let mut work = WorkCounter::default();
+
+    for entry in cache {
+        work.cache_checks += 1;
+
+        if is_time_sensitive(entry.transformation_id)
+            && current_protocol_slot > GLOBAL_TTL_20_VALID_UNTIL_SLOT
+            && entry.decision == Decision::Advance
+        {
+            decisions.push(evaluate_exact(
+                entry.transformation_id,
+                entry.quantity,
+                current_protocol_slot,
+                &mut work,
+            ));
+        } else {
+            work.cache_reuses += 1;
+            decisions.push(entry.decision);
+        }
+    }
+
+    (decisions, work)
+}
+
+fn run_cached_reject_only(
+    cache: &[CacheEntry],
+    current_protocol_slot: u64,
+) -> (Vec<Decision>, WorkCounter) {
+    let mut decisions = Vec::with_capacity(cache.len());
+    let mut work = WorkCounter::default();
+
+    for entry in cache {
+        work.cache_checks += 1;
+
+        if is_time_sensitive(entry.transformation_id)
+            && current_protocol_slot > GLOBAL_TTL_20_VALID_UNTIL_SLOT
+            && entry.decision == Decision::Reject
+        {
+            decisions.push(evaluate_exact(
+                entry.transformation_id,
+                entry.quantity,
+                current_protocol_slot,
+                &mut work,
+            ));
+        } else {
+            work.cache_reuses += 1;
+            decisions.push(entry.decision);
+        }
+    }
+
+    (decisions, work)
+}
+
+fn run_pulse(
+    cache: &[PulseCacheEntry],
+    current_protocol_slot: u64,
+) -> (Vec<Decision>, WorkCounter) {
+    let mut decisions = Vec::with_capacity(cache.len());
+    let mut work = WorkCounter::default();
+
+    for entry in cache {
+        work.cache_checks += 1;
+
+        match entry.valid_until_slot {
+            Some(valid_until) => {
+                work.temporal_checks += 1;
+
+                if current_protocol_slot > valid_until {
+                    decisions.push(evaluate_exact(
+                        entry.public.transformation_id,
+                        entry.public.quantity,
+                        current_protocol_slot,
+                        &mut work,
+                    ));
+                } else {
+                    work.cache_reuses += 1;
+                    decisions.push(entry.public.decision);
+                }
             }
-
-            index += 1;
-        }
-    }
-
-    count
-}
-
-fn mismatch_counts(reference: &[Decision], candidate: &[Decision]) -> (usize, usize) {
-    assert_eq!(reference.len(), candidate.len());
-
-    let mut false_authorizations = 0;
-    let mut false_rejects = 0;
-
-    for (expected, actual) in reference.iter().zip(candidate) {
-        match (*expected, *actual) {
-            (Decision::Reject, Decision::Advance) => false_authorizations += 1,
-            (Decision::Advance, Decision::Reject) => false_rejects += 1,
-            _ => {}
-        }
-    }
-
-    (false_authorizations, false_rejects)
-}
-
-fn mismatches_outside_overlap(reference: &[Decision], candidate: &[Decision]) -> usize {
-    assert_eq!(reference.len(), candidate.len());
-
-    let mut mismatches = 0;
-    let mut index = 0;
-
-    for transformation_id in 0..TRANSFORMATION_COUNT {
-        for _quantity in MIN_QUANTITY..=MAX_QUANTITY {
-            if !is_overlap_region(transformation_id) && reference[index] != candidate[index] {
-                mismatches += 1;
+            None => {
+                work.cache_reuses += 1;
+                decisions.push(entry.public.decision);
             }
-
-            index += 1;
         }
     }
 
-    mismatches
+    (decisions, work)
 }
 
-fn dependency_union_count(cache: &[CacheEntry]) -> usize {
-    cache
-        .iter()
-        .filter(|entry| is_dependency_region(entry.transformation_id))
-        .count()
-}
-
-fn overlap_count(cache: &[CacheEntry]) -> usize {
-    cache
-        .iter()
-        .filter(|entry| is_overlap_region(entry.transformation_id))
-        .count()
-}
-
-fn print_work(label: &str, work: &WorkCounter) {
+fn print_policy_result(label: &str, result: &AggregateResult) {
     println!("{label}");
     println!(
-        "  exact expansions:                    {}",
-        work.exact_expansions
+        "  false authorizations:                {}",
+        result.errors.false_authorizations
+    );
+    println!(
+        "  false rejects:                       {}",
+        result.errors.false_rejects
+    );
+    println!(
+        "  exact recomputations:                {}",
+        result.work.exact_recomputations
     );
     println!(
         "  economic evaluations:                {}",
-        work.economic_evaluations
-    );
-    println!(
-        "  fact accesses:                       {}",
-        work.fact_accesses
+        result.work.economic_evaluations
     );
     println!(
         "  cache checks:                        {}",
-        work.cache_checks
+        result.work.cache_checks
     );
     println!(
         "  cache reuses:                        {}",
-        work.cache_reuses
+        result.work.cache_reuses
     );
     println!(
-        "  dependency synchronizations:         {}",
-        work.dependency_synchronizations
-    );
-    println!(
-        "  coherence checks:                    {}",
-        work.coherence_checks
-    );
-    println!(
-        "  proof compositions:                  {}",
-        work.proof_compositions
-    );
-    println!(
-        "  incompatible compositions refused:   {}",
-        work.incompatible_compositions_refused
-    );
-    println!(
-        "  coherence reactivations:             {}",
-        work.coherence_reactivations
+        "  temporal checks:                     {}",
+        result.work.temporal_checks
     );
 }
 
 fn main() {
     println!("Pulse Field Lab");
-    println!("EZ-012 — Frankenstein Proof / Decision-Scoped Coherence");
+    println!("EZ-013 — Bidirectional Heterogeneous Freshness / Global-TTL Tradeoff");
     println!();
 
-    let generation_one = generation_one_world();
-    let generation_two = generation_two_world();
-    let current_world = generation_three_world();
+    let (public_cache, pulse_cache) = build_slot_100_cache();
+    assert_eq!(public_cache.len(), total_candidate_states());
+    assert_eq!(pulse_cache.len(), total_candidate_states());
+    assert_cache_integrity(&public_cache);
 
-    let alpha_fragment = ProofFragment {
-        kind: FragmentKind::Alpha,
-        generation: generation_two.generation,
-        adjustment: generation_two.alpha_adjustment,
-        canonical: true,
-    };
+    let fast_states = public_cache
+        .iter()
+        .filter(|entry| is_fast_region(entry.transformation_id))
+        .count();
+    let slow_states = public_cache
+        .iter()
+        .filter(|entry| is_slow_region(entry.transformation_id))
+        .count();
+    let time_sensitive_states = fast_states + slow_states;
+    let unaffected_states = total_candidate_states() - time_sensitive_states;
 
-    let beta_fragment = ProofFragment {
-        kind: FragmentKind::Beta,
-        generation: current_world.generation,
-        adjustment: current_world.beta_adjustment,
-        canonical: true,
-    };
+    let cached_sensitive_advance = public_cache
+        .iter()
+        .filter(|entry| {
+            is_time_sensitive(entry.transformation_id) && entry.decision == Decision::Advance
+        })
+        .count();
+    let cached_sensitive_reject = public_cache
+        .iter()
+        .filter(|entry| {
+            is_time_sensitive(entry.transformation_id) && entry.decision == Decision::Reject
+        })
+        .count();
 
-    let generation_one_oracle = run_oracle(&generation_one);
-    let generation_two_oracle = run_oracle(&generation_two);
-    let current_oracle = run_oracle(&current_world);
+    assert_eq!(fast_states, 1_000);
+    assert_eq!(slow_states, 2_000);
+    assert_eq!(time_sensitive_states, 3_000);
+    assert_eq!(unaffected_states, 7_000);
+    assert_eq!(cached_sensitive_advance, 1_500);
+    assert_eq!(cached_sensitive_reject, 1_500);
 
-    let (current_cache, cache_build_work) = build_current_cache(&current_world);
-    let cache_decisions: Vec<Decision> = current_cache.iter().map(|entry| entry.decision).collect();
+    let mut global_total = AggregateResult::default();
+    let mut byte_only_total = AggregateResult::default();
+    let mut ttl_20_total = AggregateResult::default();
+    let mut ttl_50_total = AggregateResult::default();
+    let mut cached_advance_total = AggregateResult::default();
+    let mut cached_reject_total = AggregateResult::default();
+    let mut pulse_total = AggregateResult::default();
 
-    let global = run_global_recompute(&current_world);
-    let dependency_only = run_dependency_only(&current_cache, &current_world);
-    let unsafe_frankenstein =
-        run_unsafe_frankenstein(&current_cache, alpha_fragment, beta_fragment);
-    let pulse = run_pulse(
-        &current_cache,
-        &current_world,
-        alpha_fragment,
-        beta_fragment,
+    let mut oracle_advances = Vec::with_capacity(CHECKPOINTS.len());
+
+    for current_protocol_slot in CHECKPOINTS {
+        let oracle = run_oracle(current_protocol_slot);
+        let oracle_advance = advance_count(&oracle);
+        oracle_advances.push(oracle_advance);
+
+        let (global, global_work) = run_global_recompute(current_protocol_slot);
+        let (byte_only, byte_only_work) = run_byte_only(&public_cache);
+        let (ttl_20, ttl_20_work) = run_global_ttl(
+            &public_cache,
+            current_protocol_slot,
+            GLOBAL_TTL_20_VALID_UNTIL_SLOT,
+        );
+        let (ttl_50, ttl_50_work) = run_global_ttl(
+            &public_cache,
+            current_protocol_slot,
+            GLOBAL_TTL_50_VALID_UNTIL_SLOT,
+        );
+        let (cached_advance, cached_advance_work) =
+            run_cached_advance_only(&public_cache, current_protocol_slot);
+        let (cached_reject, cached_reject_work) =
+            run_cached_reject_only(&public_cache, current_protocol_slot);
+        let (pulse, pulse_work) = run_pulse(&pulse_cache, current_protocol_slot);
+
+        let global_errors = mismatch_counts(&oracle, &global);
+        let byte_only_errors = mismatch_counts(&oracle, &byte_only);
+        let ttl_20_errors = mismatch_counts(&oracle, &ttl_20);
+        let ttl_50_errors = mismatch_counts(&oracle, &ttl_50);
+        let cached_advance_errors = mismatch_counts(&oracle, &cached_advance);
+        let cached_reject_errors = mismatch_counts(&oracle, &cached_reject);
+        let pulse_errors = mismatch_counts(&oracle, &pulse);
+
+        assert_eq!(global, oracle);
+        assert_eq!(ttl_20_errors.false_authorizations, 0);
+        assert_eq!(ttl_20_errors.false_rejects, 0);
+        assert_eq!(pulse, oracle);
+
+        if current_protocol_slot == 120 {
+            assert_eq!(pulse_work.exact_recomputations, 0);
+        }
+
+        if current_protocol_slot == 121 {
+            assert_eq!(pulse_work.exact_recomputations, 1_000);
+        }
+
+        if current_protocol_slot == 180 {
+            assert_eq!(pulse_work.exact_recomputations, 1_000);
+        }
+
+        if current_protocol_slot == 181 {
+            assert_eq!(pulse_work.exact_recomputations, 3_000);
+        }
+
+        println!("slot {current_protocol_slot}");
+        println!("  Oracle ADVANCE:                       {oracle_advance}");
+        println!(
+            "  byte-only false auth / false reject:  {} / {}",
+            byte_only_errors.false_authorizations, byte_only_errors.false_rejects
+        );
+        println!(
+            "  TTL-20 exact / errors:                {} / {}",
+            ttl_20_work.exact_recomputations,
+            ttl_20_errors.false_authorizations + ttl_20_errors.false_rejects
+        );
+        println!(
+            "  TTL-50 exact / errors:                {} / {}",
+            ttl_50_work.exact_recomputations,
+            ttl_50_errors.false_authorizations + ttl_50_errors.false_rejects
+        );
+        println!(
+            "  Pulse exact / errors:                 {} / {}",
+            pulse_work.exact_recomputations,
+            pulse_errors.false_authorizations + pulse_errors.false_rejects
+        );
+        println!();
+
+        add_work(&mut global_total.work, global_work);
+        add_errors(&mut global_total.errors, global_errors);
+
+        add_work(&mut byte_only_total.work, byte_only_work);
+        add_errors(&mut byte_only_total.errors, byte_only_errors);
+
+        add_work(&mut ttl_20_total.work, ttl_20_work);
+        add_errors(&mut ttl_20_total.errors, ttl_20_errors);
+
+        add_work(&mut ttl_50_total.work, ttl_50_work);
+        add_errors(&mut ttl_50_total.errors, ttl_50_errors);
+
+        add_work(&mut cached_advance_total.work, cached_advance_work);
+        add_errors(&mut cached_advance_total.errors, cached_advance_errors);
+
+        add_work(&mut cached_reject_total.work, cached_reject_work);
+        add_errors(&mut cached_reject_total.errors, cached_reject_errors);
+
+        add_work(&mut pulse_total.work, pulse_work);
+        add_errors(&mut pulse_total.errors, pulse_errors);
+    }
+
+    assert_eq!(
+        oracle_advances,
+        vec![1_500, 1_500, 1_500, 1_500, 1_500, 1_500]
     );
 
-    let individually_canonical = fragments_individually_canonical(alpha_fragment, beta_fragment);
-    let jointly_coherent = fragments_jointly_coherent(alpha_fragment, beta_fragment);
+    assert_eq!(global_total.errors.false_authorizations, 0);
+    assert_eq!(global_total.errors.false_rejects, 0);
+    assert_eq!(global_total.work.exact_recomputations, 60_000);
 
-    let authoritative_worlds = [generation_one, generation_two, current_world];
-    let fabricated_joint_exists = authoritative_worlds.iter().any(|world| {
-        world.alpha_adjustment == alpha_fragment.adjustment
-            && world.beta_adjustment == beta_fragment.adjustment
-    });
+    assert_eq!(byte_only_total.errors.false_authorizations, 3_000);
+    assert_eq!(byte_only_total.errors.false_rejects, 3_000);
+    assert_eq!(byte_only_total.work.exact_recomputations, 0);
+    assert_eq!(byte_only_total.work.cache_reuses, 60_000);
 
-    let dependency_states = dependency_union_count(&current_cache);
-    let overlap_states = overlap_count(&current_cache);
-    let reusable_non_joint_states = total_candidate_states() - overlap_states;
+    assert_eq!(ttl_20_total.errors.false_authorizations, 0);
+    assert_eq!(ttl_20_total.errors.false_rejects, 0);
+    assert_eq!(ttl_20_total.work.exact_recomputations, 12_000);
+    assert_eq!(ttl_20_total.work.cache_reuses, 48_000);
 
-    let current_oracle_advances = advance_count(&current_oracle);
-    let current_overlap_advances = overlap_advance_count(&current_oracle);
-    let frankenstein_overlap_advances = overlap_advance_count(&unsafe_frankenstein.decisions);
+    assert_eq!(ttl_50_total.errors.false_authorizations, 500);
+    assert_eq!(ttl_50_total.errors.false_rejects, 500);
+    assert_eq!(ttl_50_total.work.exact_recomputations, 9_000);
+    assert_eq!(ttl_50_total.work.cache_reuses, 51_000);
 
-    let (unsafe_false_authorizations, unsafe_false_rejects) =
-        mismatch_counts(&current_oracle, &unsafe_frankenstein.decisions);
-    let (pulse_false_authorizations, pulse_false_rejects) =
-        mismatch_counts(&current_oracle, &pulse.decisions);
+    assert_eq!(cached_advance_total.errors.false_authorizations, 0);
+    assert_eq!(cached_advance_total.errors.false_rejects, 3_000);
+    assert_eq!(cached_advance_total.work.exact_recomputations, 6_000);
 
-    let unsafe_non_joint_mismatches =
-        mismatches_outside_overlap(&current_oracle, &unsafe_frankenstein.decisions);
-    let pulse_non_joint_mismatches = mismatches_outside_overlap(&current_oracle, &pulse.decisions);
+    assert_eq!(cached_reject_total.errors.false_authorizations, 3_000);
+    assert_eq!(cached_reject_total.errors.false_rejects, 0);
+    assert_eq!(cached_reject_total.work.exact_recomputations, 6_000);
 
-    let cache_matches_oracle = cache_decisions == current_oracle;
-    let global_matches_oracle = global.decisions == current_oracle;
-    let dependency_matches_oracle = dependency_only.decisions == current_oracle;
-    let pulse_matches_oracle = pulse.decisions == current_oracle;
+    assert_eq!(pulse_total.errors.false_authorizations, 0);
+    assert_eq!(pulse_total.errors.false_rejects, 0);
+    assert_eq!(pulse_total.work.exact_recomputations, 6_000);
+    assert_eq!(pulse_total.work.cache_reuses, 54_000);
+    assert_eq!(pulse_total.work.temporal_checks, 18_000);
 
-    let reduction_vs_dependency = 100.0
-        * (1.0 - pulse.work.exact_expansions as f64 / dependency_only.work.exact_expansions as f64);
-    let reduction_vs_global =
-        100.0 * (1.0 - pulse.work.exact_expansions as f64 / global.work.exact_expansions as f64);
+    let reduction_vs_safe_global = 100.0
+        * (ttl_20_total.work.exact_recomputations - pulse_total.work.exact_recomputations) as f64
+        / ttl_20_total.work.exact_recomputations as f64;
+    let reduction_vs_global_recompute = 100.0
+        * (global_total.work.exact_recomputations - pulse_total.work.exact_recomputations) as f64
+        / global_total.work.exact_recomputations as f64;
 
-    println!("Fixture");
+    assert!((reduction_vs_safe_global - 50.0).abs() < f64::EPSILON);
+    assert!((reduction_vs_global_recompute - 90.0).abs() < f64::EPSILON);
+
+    println!("fixture");
     println!(
-        "  total candidate states:              {}",
+        "  total candidate states:               {}",
         total_candidate_states()
     );
-    println!("  dependency union states:             {dependency_states}");
-    println!("  joint overlap states:                {overlap_states}");
+    println!("  fast-lifetime states:                 {fast_states}");
+    println!("  slow-lifetime states:                 {slow_states}");
+    println!("  unaffected states:                    {unaffected_states}");
+    println!("  observed slot:                        {OBSERVED_SLOT}");
+    println!("  fast valid through:                   {FAST_VALID_UNTIL_SLOT}");
+    println!("  slow valid through:                   {SLOW_VALID_UNTIL_SLOT}");
     println!(
-        "  reusable non-joint states:           {}",
-        reusable_non_joint_states
-    );
-    println!(
-        "  Generation 1 Alpha/Beta:             {}/{}",
-        generation_one.alpha_adjustment, generation_one.beta_adjustment
-    );
-    println!(
-        "  Generation 2 Alpha/Beta:             {}/{}",
-        generation_two.alpha_adjustment, generation_two.beta_adjustment
-    );
-    println!(
-        "  Generation 3 Alpha/Beta:             {}/{}",
-        current_world.alpha_adjustment, current_world.beta_adjustment
+        "  cached sensitive ADVANCE / REJECT:    {cached_sensitive_advance} / {cached_sensitive_reject}"
     );
     println!();
 
-    println!("Proof fragments");
-    println!("  individually canonical:              {individually_canonical}");
-    println!("  jointly coherent:                    {jointly_coherent}");
-    println!(
-        "  fabricated +4/+4 world exists:       {}",
-        fabricated_joint_exists
-    );
+    print_policy_result("Global recompute", &global_total);
     println!();
-
-    println!("Ground truth");
-    println!(
-        "  Generation 1 Oracle ADVANCE:         {}",
-        advance_count(&generation_one_oracle)
-    );
-    println!(
-        "  Generation 2 Oracle ADVANCE:         {}",
-        advance_count(&generation_two_oracle)
-    );
-    println!("  Generation 3 Oracle ADVANCE:         {current_oracle_advances}");
-    println!("  current overlap ADVANCE:             {current_overlap_advances}");
-    println!(
-        "  Frankenstein overlap ADVANCE:        {}",
-        frankenstein_overlap_advances
-    );
+    print_policy_result("Byte-only reuse", &byte_only_total);
     println!();
-
-    println!("Unsafe Frankenstein composer");
-    println!("  false authorizations:                {unsafe_false_authorizations}");
-    println!("  false rejects:                       {unsafe_false_rejects}");
-    println!("  non-joint mismatches:                {unsafe_non_joint_mismatches}");
+    print_policy_result("Global TTL-20", &ttl_20_total);
     println!();
-
-    println!("Correctness");
-    println!("  current cache matches Oracle:        {cache_matches_oracle}");
-    println!("  global matches Oracle:               {global_matches_oracle}");
-    println!("  dependency-only matches Oracle:      {dependency_matches_oracle}");
-    println!("  Pulse matches Oracle:                {pulse_matches_oracle}");
-    println!("  Pulse false authorizations:          {pulse_false_authorizations}");
-    println!("  Pulse false rejects:                 {pulse_false_rejects}");
-    println!("  Pulse non-joint mismatches:          {pulse_non_joint_mismatches}");
+    print_policy_result("Global TTL-50", &ttl_50_total);
     println!();
-
-    print_work("Current cache build", &cache_build_work);
+    print_policy_result("Cached-ADVANCE-only challenger", &cached_advance_total);
     println!();
-    print_work("Global recompute", &global.work);
+    print_policy_result("Cached-REJECT-only challenger", &cached_reject_total);
     println!();
-    print_work("Dependency-only synchronization", &dependency_only.work);
-    println!();
-    print_work("Unsafe Frankenstein composer", &unsafe_frankenstein.work);
-    println!();
-    print_work("Pulse decision-scoped coherence", &pulse.work);
+    print_policy_result("Pulse evidence-specific freshness", &pulse_total);
     println!();
 
     println!(
-        "Pulse reduction vs dependency-only:    {:.2}%",
-        reduction_vs_dependency
+        "Pulse exact reduction vs safe Global TTL-20: {:.2}%",
+        reduction_vs_safe_global
     );
     println!(
-        "Pulse reduction vs global:             {:.2}%",
-        reduction_vs_global
+        "Pulse exact reduction vs Global recompute:  {:.2}%",
+        reduction_vs_global_recompute
     );
     println!();
-
-    assert_eq!(total_candidate_states(), 10_000);
-    assert_eq!(dependency_states, 3_000);
-    assert_eq!(overlap_states, 1_000);
-    assert_eq!(reusable_non_joint_states, 9_000);
-
-    assert!(individually_canonical);
-    assert!(!jointly_coherent);
-    assert!(!fabricated_joint_exists);
-
-    assert_eq!(current_oracle_advances, 180);
-    assert_eq!(current_overlap_advances, 90);
-    assert_eq!(frankenstein_overlap_advances, 170);
-
-    assert!(cache_matches_oracle);
-    assert!(global_matches_oracle);
-    assert!(dependency_matches_oracle);
-
-    assert_eq!(unsafe_false_authorizations, 80);
-    assert_eq!(unsafe_false_rejects, 0);
-    assert_eq!(unsafe_non_joint_mismatches, 0);
-
-    assert!(pulse_matches_oracle);
-    assert_eq!(pulse_false_authorizations, 0);
-    assert_eq!(pulse_false_rejects, 0);
-    assert_eq!(pulse_non_joint_mismatches, 0);
-
-    assert_eq!(global.work.exact_expansions, 10_000);
-    assert_eq!(dependency_only.work.exact_expansions, 3_000);
-    assert_eq!(pulse.work.coherence_checks, 1_000);
-    assert_eq!(pulse.work.incompatible_compositions_refused, 1_000);
-    assert_eq!(pulse.work.coherence_reactivations, 1_000);
-    assert_eq!(pulse.work.exact_expansions, 1_000);
-    assert_eq!(pulse.work.cache_reuses, 9_000);
-    assert_eq!(pulse.work.proof_compositions, 0);
-
-    assert!((reduction_vs_dependency - 66.666_666).abs() < 0.01);
-    assert!((reduction_vs_global - 90.0).abs() < 0.01);
-
-    println!("EZ-012 CORRECTNESS GATE: PASS");
-    println!("Invariant: INDIVIDUAL CANONICALITY DOES NOT IMPLY JOINT COHERENCE.");
-    println!("DO NOT SYNCHRONIZE THE UNIVERSE; SYNCHRONIZE THE PROOF.");
+    println!("EZ-013 CORRECTNESS GATE: PASS");
+    println!(
+        "ONE CLOCK DOES NOT FIT ALL EVIDENCE. WHEN DIFFERENT DECISION-RELEVANT FACTS EXPIRE AT DIFFERENT TIMES, A UNIVERSAL FRESHNESS HORIZON MUST EITHER RECOMPUTE STILL-VALID EVIDENCE OR RISK STALE DECISIONS; EVIDENCE-SPECIFIC VALIDITY MAY AVOID THAT TRADEOFF."
+    );
 }
