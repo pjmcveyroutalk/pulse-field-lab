@@ -355,9 +355,7 @@ fn overlap_advance_count(decisions: &[Decision]) -> usize {
 
     for transformation_id in 0..TRANSFORMATION_COUNT {
         for _quantity in MIN_QUANTITY..=MAX_QUANTITY {
-            if is_overlap_region(transformation_id)
-                && decisions[index] == Decision::Advance
-            {
+            if is_overlap_region(transformation_id) && decisions[index] == Decision::Advance {
                 count += 1;
             }
 
@@ -393,9 +391,7 @@ fn mismatches_outside_overlap(reference: &[Decision], candidate: &[Decision]) ->
 
     for transformation_id in 0..TRANSFORMATION_COUNT {
         for _quantity in MIN_QUANTITY..=MAX_QUANTITY {
-            if !is_overlap_region(transformation_id)
-                && reference[index] != candidate[index]
-            {
+            if !is_overlap_region(transformation_id) && reference[index] != candidate[index] {
                 mismatches += 1;
             }
 
@@ -422,20 +418,38 @@ fn overlap_count(cache: &[CacheEntry]) -> usize {
 
 fn print_work(label: &str, work: &WorkCounter) {
     println!("{label}");
-    println!("  exact expansions:                    {}", work.exact_expansions);
+    println!(
+        "  exact expansions:                    {}",
+        work.exact_expansions
+    );
     println!(
         "  economic evaluations:                {}",
         work.economic_evaluations
     );
-    println!("  fact accesses:                       {}", work.fact_accesses);
-    println!("  cache checks:                        {}", work.cache_checks);
-    println!("  cache reuses:                        {}", work.cache_reuses);
+    println!(
+        "  fact accesses:                       {}",
+        work.fact_accesses
+    );
+    println!(
+        "  cache checks:                        {}",
+        work.cache_checks
+    );
+    println!(
+        "  cache reuses:                        {}",
+        work.cache_reuses
+    );
     println!(
         "  dependency synchronizations:         {}",
         work.dependency_synchronizations
     );
-    println!("  coherence checks:                    {}", work.coherence_checks);
-    println!("  proof compositions:                  {}", work.proof_compositions);
+    println!(
+        "  coherence checks:                    {}",
+        work.coherence_checks
+    );
+    println!(
+        "  proof compositions:                  {}",
+        work.proof_compositions
+    );
     println!(
         "  incompatible compositions refused:   {}",
         work.incompatible_compositions_refused
@@ -474,8 +488,7 @@ fn main() {
     let current_oracle = run_oracle(&current_world);
 
     let (current_cache, cache_build_work) = build_current_cache(&current_world);
-    let cache_decisions: Vec<Decision> =
-        current_cache.iter().map(|entry| entry.decision).collect();
+    let cache_decisions: Vec<Decision> = current_cache.iter().map(|entry| entry.decision).collect();
 
     let global = run_global_recompute(&current_world);
     let dependency_only = run_dependency_only(&current_cache, &current_world);
@@ -488,8 +501,7 @@ fn main() {
         beta_fragment,
     );
 
-    let individually_canonical =
-        fragments_individually_canonical(alpha_fragment, beta_fragment);
+    let individually_canonical = fragments_individually_canonical(alpha_fragment, beta_fragment);
     let jointly_coherent = fragments_jointly_coherent(alpha_fragment, beta_fragment);
 
     let authoritative_worlds = [generation_one, generation_two, current_world];
@@ -504,8 +516,7 @@ fn main() {
 
     let current_oracle_advances = advance_count(&current_oracle);
     let current_overlap_advances = overlap_advance_count(&current_oracle);
-    let frankenstein_overlap_advances =
-        overlap_advance_count(&unsafe_frankenstein.decisions);
+    let frankenstein_overlap_advances = overlap_advance_count(&unsafe_frankenstein.decisions);
 
     let (unsafe_false_authorizations, unsafe_false_rejects) =
         mismatch_counts(&current_oracle, &unsafe_frankenstein.decisions);
@@ -514,8 +525,7 @@ fn main() {
 
     let unsafe_non_joint_mismatches =
         mismatches_outside_overlap(&current_oracle, &unsafe_frankenstein.decisions);
-    let pulse_non_joint_mismatches =
-        mismatches_outside_overlap(&current_oracle, &pulse.decisions);
+    let pulse_non_joint_mismatches = mismatches_outside_overlap(&current_oracle, &pulse.decisions);
 
     let cache_matches_oracle = cache_decisions == current_oracle;
     let global_matches_oracle = global.decisions == current_oracle;
@@ -523,14 +533,16 @@ fn main() {
     let pulse_matches_oracle = pulse.decisions == current_oracle;
 
     let reduction_vs_dependency = 100.0
-        * (1.0
-            - pulse.work.exact_expansions as f64
-                / dependency_only.work.exact_expansions as f64);
-    let reduction_vs_global = 100.0
-        * (1.0 - pulse.work.exact_expansions as f64 / global.work.exact_expansions as f64);
+        * (1.0 - pulse.work.exact_expansions as f64
+            / dependency_only.work.exact_expansions as f64);
+    let reduction_vs_global =
+        100.0 * (1.0 - pulse.work.exact_expansions as f64 / global.work.exact_expansions as f64);
 
     println!("Fixture");
-    println!("  total candidate states:              {}", total_candidate_states());
+    println!(
+        "  total candidate states:              {}",
+        total_candidate_states()
+    );
     println!("  dependency union states:             {dependency_states}");
     println!("  joint overlap states:                {overlap_states}");
     println!(
@@ -608,7 +620,10 @@ fn main() {
         "Pulse reduction vs dependency-only:    {:.2}%",
         reduction_vs_dependency
     );
-    println!("Pulse reduction vs global:             {:.2}%", reduction_vs_global);
+    println!(
+        "Pulse reduction vs global:             {:.2}%",
+        reduction_vs_global
+    );
     println!();
 
     assert_eq!(total_candidate_states(), 10_000);
@@ -650,8 +665,6 @@ fn main() {
     assert!((reduction_vs_global - 90.0).abs() < 0.01);
 
     println!("EZ-012 CORRECTNESS GATE: PASS");
-    println!(
-        "Invariant: INDIVIDUAL CANONICALITY DOES NOT IMPLY JOINT COHERENCE."
-    );
+    println!("Invariant: INDIVIDUAL CANONICALITY DOES NOT IMPLY JOINT COHERENCE.");
     println!("DO NOT SYNCHRONIZE THE UNIVERSE; SYNCHRONIZE THE PROOF.");
 }
