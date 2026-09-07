@@ -99,11 +99,7 @@ fn is_alpha_dependent(transformation_id: usize) -> bool {
 }
 
 fn base_edge(transformation_id: usize) -> i64 {
-    if in_region(
-        transformation_id,
-        STABLE_REGION_START,
-        STABLE_REGION_END,
-    ) {
+    if in_region(transformation_id, STABLE_REGION_START, STABLE_REGION_END) {
         STABLE_BASE_EDGE
     } else if is_alpha_dependent(transformation_id) {
         ALPHA_BASE_EDGE
@@ -269,9 +265,7 @@ fn certificate_allows_reuse(
     work.certificate_checks += 1;
 
     match entry.certificate {
-        Some(certificate) => {
-            current_alpha_adjustment <= certificate.max_positive_alpha_adjustment
-        }
+        Some(certificate) => current_alpha_adjustment <= certificate.max_positive_alpha_adjustment,
         None => false,
     }
 }
@@ -370,10 +364,7 @@ fn advance_count(decisions: &[Decision]) -> usize {
 fn print_work(label: &str, work: &WorkCounter) {
     println!("{label}");
     println!("  exact expansions:          {}", work.exact_expansions);
-    println!(
-        "  economic evaluations:      {}",
-        work.economic_evaluations
-    );
+    println!("  economic evaluations:      {}", work.economic_evaluations);
     println!("  fact accesses:             {}", work.fact_accesses);
     println!("  cache checks:              {}", work.cache_checks);
     println!("  cache reuses:              {}", work.cache_reuses);
@@ -409,14 +400,15 @@ fn main() {
     let unsafe_b = run_unsafe_semantic_reuse(&phase_a_cache);
     let pulse_b = run_pulse_semantic(&phase_a_cache, &phase_b);
 
-    let cache_decisions: Vec<Decision> =
-        phase_a_cache.iter().map(|entry| entry.decision).collect();
+    let cache_decisions: Vec<Decision> = phase_a_cache.iter().map(|entry| entry.decision).collect();
 
     let dependency_keys = dependency_cone(&phase_a_cache);
     let changed_truth = changed_decision_keys(&oracle_a, &oracle_b, &phase_a_cache);
 
-    let expected_firewalled: BTreeSet<CandidateKey> =
-        dependency_keys.difference(&changed_truth).copied().collect();
+    let expected_firewalled: BTreeSet<CandidateKey> = dependency_keys
+        .difference(&changed_truth)
+        .copied()
+        .collect();
 
     let cache_matches_phase_a = cache_decisions == oracle_a;
     let global_matches_oracle = global_b.decisions == oracle_b;
@@ -426,14 +418,9 @@ fn main() {
     let unsafe_stale_authorized = decision_mismatches(&oracle_b, &unsafe_b.decisions);
     let pulse_stale_authorized = decision_mismatches(&oracle_b, &pulse_b.decisions);
 
-    let missed_semantic_invalidations = changed_truth
-        .difference(&pulse_b.invalidated_keys)
-        .count();
+    let missed_semantic_invalidations = changed_truth.difference(&pulse_b.invalidated_keys).count();
 
-    let false_semantic_invalidations = pulse_b
-        .invalidated_keys
-        .difference(&changed_truth)
-        .count();
+    let false_semantic_invalidations = pulse_b.invalidated_keys.difference(&changed_truth).count();
 
     let missed_firewalls = expected_firewalled
         .difference(&pulse_b.firewalled_keys)
@@ -457,17 +444,11 @@ fn main() {
         "Stable ADVANCE region:    {}..{}",
         STABLE_REGION_START, STABLE_REGION_END
     );
-    println!(
-        "Phase B Alpha adjustment: {}",
-        phase_b.alpha_adjustment
-    );
+    println!("Phase B Alpha adjustment: {}", phase_b.alpha_adjustment);
     println!();
 
     println!("Semantic topology");
-    println!(
-        "  changed dependency cone:       {}",
-        dependency_keys.len()
-    );
+    println!("  changed dependency cone:       {}", dependency_keys.len());
     println!("  unaffected entries:            {unaffected_entries}");
     println!("  decisions that truly changed:  {}", changed_truth.len());
     println!(
@@ -486,26 +467,21 @@ fn main() {
         "  ADVANCE:                    {}",
         advance_count(&unsafe_b.decisions)
     );
+    println!("  stale-authorized decisions: {unsafe_stale_authorized}");
     println!(
-        "  stale-authorized decisions: {unsafe_stale_authorized}"
+        "  exact recomputations:       {}",
+        unsafe_b.work.exact_expansions
     );
-    println!("  exact recomputations:       {}", unsafe_b.work.exact_expansions);
     println!();
 
     println!("Correctness");
     println!("  Phase A cache matches Oracle:       {cache_matches_phase_a}");
     println!("  global matches Oracle:              {global_matches_oracle}");
-    println!(
-        "  dependency-only matches Oracle:     {dependency_matches_oracle}"
-    );
+    println!("  dependency-only matches Oracle:     {dependency_matches_oracle}");
     println!("  Pulse matches Oracle:               {pulse_matches_oracle}");
     println!("  Pulse stale-authorized:             {pulse_stale_authorized}");
-    println!(
-        "  missed semantic invalidations:      {missed_semantic_invalidations}"
-    );
-    println!(
-        "  false semantic invalidations:       {false_semantic_invalidations}"
-    );
+    println!("  missed semantic invalidations:      {missed_semantic_invalidations}");
+    println!("  false semantic invalidations:       {false_semantic_invalidations}");
     println!("  missed certificate firewalls:       {missed_firewalls}");
     println!("  false certificate firewalls:        {false_firewalls}");
     println!(
@@ -533,8 +509,7 @@ fn main() {
         100.0 * (dependency_expansions - pulse_expansions) / dependency_expansions;
 
     let global_expansions = global_b.work.exact_expansions as f64;
-    let global_reduction =
-        100.0 * (global_expansions - pulse_expansions) / global_expansions;
+    let global_reduction = 100.0 * (global_expansions - pulse_expansions) / global_expansions;
 
     println!(
         "Reduction vs dependency-only recomputation: {:.2}%",
