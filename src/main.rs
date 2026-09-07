@@ -100,14 +100,11 @@ fn oracle_transformation(id: usize, world: &VisibleWorld) -> OracleTransformatio
 
     let facts = world.facts;
 
-    let blocked =
-        id >= facts.blocked_region_start && id < facts.blocked_region_end;
+    let blocked = id >= facts.blocked_region_start && id < facts.blocked_region_end;
 
-    let expensive =
-        id % facts.expensive_modulus == facts.expensive_remainder;
+    let expensive = id % facts.expensive_modulus == facts.expensive_remainder;
 
-    let weak =
-        id >= facts.weak_region_start && id < facts.weak_region_end;
+    let weak = id >= facts.weak_region_start && id < facts.weak_region_end;
 
     let gross_value = if id % ADVANCE_MODULUS == 0 {
         40
@@ -127,11 +124,7 @@ fn oracle_transformation(id: usize, world: &VisibleWorld) -> OracleTransformatio
     }
 }
 
-fn evaluate_exact(
-    id: usize,
-    world: &VisibleWorld,
-    work: &mut WorkCounter,
-) -> Decision {
+fn evaluate_exact(id: usize, world: &VisibleWorld, work: &mut WorkCounter) -> Decision {
     work.exact_expansions += 1;
 
     let facts = world.facts;
@@ -139,8 +132,7 @@ fn evaluate_exact(
     work.fact_accesses += 2;
     work.constraint_evaluations += 1;
 
-    let blocked =
-        id >= facts.blocked_region_start && id < facts.blocked_region_end;
+    let blocked = id >= facts.blocked_region_start && id < facts.blocked_region_end;
 
     if blocked {
         return Decision::Reject;
@@ -149,11 +141,9 @@ fn evaluate_exact(
     work.fact_accesses += 2;
     work.economic_evaluations += 1;
 
-    let expensive =
-        id % facts.expensive_modulus == facts.expensive_remainder;
+    let expensive = id % facts.expensive_modulus == facts.expensive_remainder;
 
-    let weak =
-        id >= facts.weak_region_start && id < facts.weak_region_end;
+    let weak = id >= facts.weak_region_start && id < facts.weak_region_end;
 
     let gross_value = if id % ADVANCE_MODULUS == 0 {
         40
@@ -223,23 +213,17 @@ fn family_fully_blocked(
     work.fact_accesses += 2;
     work.constraint_evaluations += 1;
 
-    family.start >= world.facts.blocked_region_start
-        && family.end <= world.facts.blocked_region_end
+    family.start >= world.facts.blocked_region_start && family.end <= world.facts.blocked_region_end
 }
 
-fn family_crosses_block_boundary(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-) -> bool {
+fn family_crosses_block_boundary(family: CandidateFamily, world: &VisibleWorld) -> bool {
     let facts = world.facts;
 
     let crosses_start =
-        family.start < facts.blocked_region_start
-            && family.end > facts.blocked_region_start;
+        family.start < facts.blocked_region_start && family.end > facts.blocked_region_start;
 
     let crosses_end =
-        family.start < facts.blocked_region_end
-            && family.end > facts.blocked_region_end;
+        family.start < facts.blocked_region_end && family.end > facts.blocked_region_end;
 
     crosses_start || crosses_end
 }
@@ -255,16 +239,13 @@ fn family_economically_uniform_reject(
 
     let facts = world.facts;
 
-    let fully_weak =
-        family.start >= facts.weak_region_start
-            && family.end <= facts.weak_region_end;
+    let fully_weak = family.start >= facts.weak_region_start && family.end <= facts.weak_region_end;
 
     if !fully_weak {
         return false;
     }
 
-    let contains_advance_exception =
-        (family.start..family.end).any(|id| id % ADVANCE_MODULUS == 0);
+    let contains_advance_exception = (family.start..family.end).any(|id| id % ADVANCE_MODULUS == 0);
 
     if contains_advance_exception {
         return false;
@@ -288,11 +269,7 @@ fn split_family(family: CandidateFamily) -> (CandidateFamily, CandidateFamily) {
     )
 }
 
-fn resolve_family(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-    result: &mut EngineResult,
-) {
+fn resolve_family(family: CandidateFamily, world: &VisibleWorld, result: &mut EngineResult) {
     if family.is_empty() {
         return;
     }
@@ -386,10 +363,7 @@ fn main() {
     let false_important_prunes = oracle.difference(&pulse.advances).count();
 
     println!("Fixture: EZ-002 — Overlapping Constraints");
-    println!(
-        "Total transformations: {}",
-        world.total_transformations
-    );
+    println!("Total transformations: {}", world.total_transformations);
     println!("Oracle ADVANCE count: {}", oracle.len());
     println!();
 
