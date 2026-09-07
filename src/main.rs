@@ -129,18 +129,11 @@ fn visible_world() -> VisibleWorld {
     }
 }
 
-fn transformation_in_merge_region(
-    transformation_id: usize,
-    world: &VisibleWorld,
-) -> bool {
-    transformation_id >= world.merge_region_start
-        && transformation_id < world.merge_region_end
+fn transformation_in_merge_region(transformation_id: usize, world: &VisibleWorld) -> bool {
+    transformation_id >= world.merge_region_start && transformation_id < world.merge_region_end
 }
 
-fn transformation_execution_enabled(
-    transformation_id: usize,
-    world: &VisibleWorld,
-) -> bool {
+fn transformation_execution_enabled(transformation_id: usize, world: &VisibleWorld) -> bool {
     if transformation_in_merge_region(transformation_id, world) {
         transformation_id < world.hidden_capability_boundary
     } else {
@@ -156,10 +149,7 @@ fn transformation_impact(transformation_id: usize) -> i64 {
     MIN_IMPACT + (transformation_id % 3) as i64
 }
 
-fn current_evidence_for_candidate(
-    transformation_id: usize,
-    world: &VisibleWorld,
-) -> Evidence {
+fn current_evidence_for_candidate(transformation_id: usize, world: &VisibleWorld) -> Evidence {
     Evidence {
         edge_adjustment: if transformation_in_merge_region(transformation_id, world) {
             MERGE_REGION_EDGE_ADJUSTMENT
@@ -169,11 +159,7 @@ fn current_evidence_for_candidate(
     }
 }
 
-fn candidate_profit(
-    transformation_id: usize,
-    quantity: usize,
-    evidence: Evidence,
-) -> i64 {
+fn candidate_profit(transformation_id: usize, quantity: usize, evidence: Evidence) -> i64 {
     let quantity = quantity as i64;
     let edge = transformation_edge(transformation_id) + evidence.edge_adjustment;
     let impact = transformation_impact(transformation_id);
@@ -305,24 +291,15 @@ fn run_unsafe_coarse_merge(world: &VisibleWorld) -> UnsafeCoarseResult {
     }
 }
 
-fn family_crosses_id_boundary(
-    family: CandidateFamily,
-    boundary: usize,
-) -> bool {
+fn family_crosses_id_boundary(family: CandidateFamily, boundary: usize) -> bool {
     family.id_start < boundary && family.id_end > boundary
 }
 
-fn family_crosses_merge_start(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-) -> bool {
+fn family_crosses_merge_start(family: CandidateFamily, world: &VisibleWorld) -> bool {
     family_crosses_id_boundary(family, world.merge_region_start)
 }
 
-fn family_crosses_merge_end(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-) -> bool {
+fn family_crosses_merge_end(family: CandidateFamily, world: &VisibleWorld) -> bool {
     family_crosses_id_boundary(family, world.merge_region_end)
 }
 
@@ -333,26 +310,15 @@ fn family_crosses_hidden_capability_boundary(
     family_crosses_id_boundary(family, world.hidden_capability_boundary)
 }
 
-fn family_fully_in_merge_region(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-) -> bool {
-    family.id_start >= world.merge_region_start
-        && family.id_end <= world.merge_region_end
+fn family_fully_in_merge_region(family: CandidateFamily, world: &VisibleWorld) -> bool {
+    family.id_start >= world.merge_region_start && family.id_end <= world.merge_region_end
 }
 
-fn family_fully_in_disabled_region(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-) -> bool {
-    family.id_start >= world.hidden_capability_boundary
-        && family.id_end <= world.merge_region_end
+fn family_fully_in_disabled_region(family: CandidateFamily, world: &VisibleWorld) -> bool {
+    family.id_start >= world.hidden_capability_boundary && family.id_end <= world.merge_region_end
 }
 
-fn family_evidence(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-) -> Evidence {
+fn family_evidence(family: CandidateFamily, world: &VisibleWorld) -> Evidence {
     Evidence {
         edge_adjustment: if family_fully_in_merge_region(family, world) {
             MERGE_REGION_EDGE_ADJUSTMENT
@@ -362,10 +328,7 @@ fn family_evidence(
     }
 }
 
-fn optimistic_profit_at_quantity(
-    quantity: usize,
-    evidence: Evidence,
-) -> i64 {
+fn optimistic_profit_at_quantity(quantity: usize, evidence: Evidence) -> i64 {
     let quantity = quantity as i64;
     let edge = MAX_EDGE + evidence.edge_adjustment;
 
@@ -432,9 +395,7 @@ fn split_family_at_id(
     )
 }
 
-fn split_family(
-    family: CandidateFamily,
-) -> (CandidateFamily, CandidateFamily) {
+fn split_family(family: CandidateFamily) -> (CandidateFamily, CandidateFamily) {
     if family.id_len() >= family.quantity_len() && family.id_len() > 1 {
         let midpoint = family.id_start + family.id_len() / 2;
 
@@ -490,11 +451,7 @@ fn compression_certificate_allows_merge(
     }
 }
 
-fn resolve_exact_family(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-    result: &mut EngineResult,
-) {
+fn resolve_exact_family(family: CandidateFamily, world: &VisibleWorld, result: &mut EngineResult) {
     for transformation_id in family.id_start..family.id_end {
         for quantity in family.quantity_start..family.quantity_end {
             let key = CandidateKey {
@@ -502,12 +459,7 @@ fn resolve_exact_family(
                 quantity,
             };
 
-            match evaluate_exact(
-                transformation_id,
-                quantity,
-                world,
-                &mut result.work,
-            ) {
+            match evaluate_exact(transformation_id, quantity, world, &mut result.work) {
                 Decision::Advance => {
                     result.advances.insert(key);
                 }
@@ -519,11 +471,7 @@ fn resolve_exact_family(
     }
 }
 
-fn resolve_family(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-    result: &mut EngineResult,
-) {
+fn resolve_family(family: CandidateFamily, world: &VisibleWorld, result: &mut EngineResult) {
     if family.is_empty() {
         return;
     }
@@ -532,8 +480,7 @@ fn resolve_family(
         result.work.family_splits += 1;
         result.work.semantic_splits += 1;
 
-        let (left, right) =
-            split_family_at_id(family, world.merge_region_start);
+        let (left, right) = split_family_at_id(family, world.merge_region_start);
 
         resolve_family(left, world, result);
         resolve_family(right, world, result);
@@ -544,24 +491,18 @@ fn resolve_family(
         result.work.family_splits += 1;
         result.work.semantic_splits += 1;
 
-        let (left, right) =
-            split_family_at_id(family, world.merge_region_end);
+        let (left, right) = split_family_at_id(family, world.merge_region_end);
 
         resolve_family(left, world, result);
         resolve_family(right, world, result);
         return;
     }
 
-    if !compression_certificate_allows_merge(
-        family,
-        world,
-        &mut result.work,
-    ) {
+    if !compression_certificate_allows_merge(family, world, &mut result.work) {
         result.work.family_splits += 1;
         result.work.semantic_splits += 1;
 
-        let (left, right) =
-            split_family_at_id(family, world.hidden_capability_boundary);
+        let (left, right) = split_family_at_id(family, world.hidden_capability_boundary);
 
         resolve_family(left, world, result);
         resolve_family(right, world, result);
@@ -615,34 +556,22 @@ fn run_pulse(world: &VisibleWorld) -> EngineResult {
     result
 }
 
-fn coarse_signature_collapses_merge_region(
-    world: &VisibleWorld,
-) -> bool {
-    let first =
-        current_evidence_for_candidate(world.merge_region_start, world);
-    let last =
-        current_evidence_for_candidate(world.merge_region_end - 1, world);
+fn coarse_signature_collapses_merge_region(world: &VisibleWorld) -> bool {
+    let first = current_evidence_for_candidate(world.merge_region_start, world);
+    let last = current_evidence_for_candidate(world.merge_region_end - 1, world);
 
-    let first_capability =
-        transformation_execution_enabled(world.merge_region_start, world);
-    let last_capability =
-        transformation_execution_enabled(world.merge_region_end - 1, world);
+    let first_capability = transformation_execution_enabled(world.merge_region_start, world);
+    let last_capability = transformation_execution_enabled(world.merge_region_end - 1, world);
 
-    first.edge_adjustment == last.edge_adjustment
-        && first_capability != last_capability
+    first.edge_adjustment == last.edge_adjustment && first_capability != last_capability
 }
 
-fn enabled_merge_region_advance_count(
-    world: &VisibleWorld,
-) -> usize {
+fn enabled_merge_region_advance_count(world: &VisibleWorld) -> usize {
     let mut count = 0;
 
-    for transformation_id
-        in world.merge_region_start..world.hidden_capability_boundary
-    {
+    for transformation_id in world.merge_region_start..world.hidden_capability_boundary {
         for quantity in world.min_quantity..=world.max_quantity {
-            if oracle_candidate(transformation_id, quantity, world).decision()
-                == Decision::Advance
+            if oracle_candidate(transformation_id, quantity, world).decision() == Decision::Advance
             {
                 count += 1;
             }
@@ -652,16 +581,11 @@ fn enabled_merge_region_advance_count(
     count
 }
 
-fn disabled_positive_economics_count(
-    world: &VisibleWorld,
-) -> usize {
+fn disabled_positive_economics_count(world: &VisibleWorld) -> usize {
     let mut count = 0;
 
-    for transformation_id
-        in world.hidden_capability_boundary..world.merge_region_end
-    {
-        let evidence =
-            current_evidence_for_candidate(transformation_id, world);
+    for transformation_id in world.hidden_capability_boundary..world.merge_region_end {
+        let evidence = current_evidence_for_candidate(transformation_id, world);
 
         for quantity in world.min_quantity..=world.max_quantity {
             if candidate_profit(transformation_id, quantity, evidence) > 0 {
@@ -673,9 +597,7 @@ fn disabled_positive_economics_count(
     count
 }
 
-fn dangerous_false_merge_fixture_is_valid(
-    world: &VisibleWorld,
-) -> bool {
+fn dangerous_false_merge_fixture_is_valid(world: &VisibleWorld) -> bool {
     world.merge_region_start < world.hidden_capability_boundary
         && world.hidden_capability_boundary < world.merge_region_end
         && coarse_signature_collapses_merge_region(world)
@@ -689,14 +611,8 @@ fn print_work(label: &str, work: &WorkCounter) {
         "  family evaluations:             {}",
         work.family_evaluations
     );
-    println!(
-        "  family splits:                  {}",
-        work.family_splits
-    );
-    println!(
-        "  semantic splits:                {}",
-        work.semantic_splits
-    );
+    println!("  family splits:                  {}", work.family_splits);
+    println!("  semantic splits:                {}", work.semantic_splits);
     println!(
         "  family rejections:              {}",
         work.family_rejections
@@ -717,10 +633,7 @@ fn print_work(label: &str, work: &WorkCounter) {
         "  bound evaluations:              {}",
         work.bound_evaluations
     );
-    println!(
-        "  fact accesses:                   {}",
-        work.fact_accesses
-    );
+    println!("  fact accesses:                   {}", work.fact_accesses);
     println!(
         "  compression checks:             {}",
         work.compression_checks
@@ -743,40 +656,31 @@ fn main() {
     let pulse = run_pulse(&world);
 
     let total_candidate_states =
-        world.transformation_count
-            * (world.max_quantity - world.min_quantity + 1);
+        world.transformation_count * (world.max_quantity - world.min_quantity + 1);
 
-    let fixture_valid =
-        dangerous_false_merge_fixture_is_valid(&world);
+    let fixture_valid = dangerous_false_merge_fixture_is_valid(&world);
 
-    let enabled_merge_advances =
-        enabled_merge_region_advance_count(&world);
+    let enabled_merge_advances = enabled_merge_region_advance_count(&world);
 
-    let disabled_positive_economics =
-        disabled_positive_economics_count(&world);
+    let disabled_positive_economics = disabled_positive_economics_count(&world);
 
-    let unsafe_false_prunes =
-        oracle.difference(&unsafe_coarse.advances).count();
+    let unsafe_false_prunes = oracle.difference(&unsafe_coarse.advances).count();
 
-    let unsafe_false_advances =
-        unsafe_coarse.advances.difference(&oracle).count();
+    let unsafe_false_advances = unsafe_coarse.advances.difference(&oracle).count();
 
     let baseline_matches_oracle = baseline.advances == oracle;
     let pulse_matches_oracle = pulse.advances == oracle;
     let decision_agreement = baseline.advances == pulse.advances;
 
-    let false_important_prunes =
-        oracle.difference(&pulse.advances).count();
+    let false_important_prunes = oracle.difference(&pulse.advances).count();
 
-    let false_advances =
-        pulse.advances.difference(&oracle).count();
+    let false_advances = pulse.advances.difference(&oracle).count();
 
     println!("Fixture: EZ-007 — Dangerous False Merge");
     println!("Total candidate states: {total_candidate_states}");
     println!(
         "Merge region: {}..{}",
-        world.merge_region_start,
-        world.merge_region_end
+        world.merge_region_start, world.merge_region_end
     );
     println!(
         "Hidden capability boundary: {}",
@@ -786,9 +690,7 @@ fn main() {
         "Coarse signature collapses merge region: {}",
         coarse_signature_collapses_merge_region(&world)
     );
-    println!(
-        "Enabled-side Oracle ADVANCE count: {enabled_merge_advances}"
-    );
+    println!("Enabled-side Oracle ADVANCE count: {enabled_merge_advances}");
     println!(
         "Disabled-side positive economics count: \
          {disabled_positive_economics}"
@@ -814,30 +716,16 @@ fn main() {
         "  REJECT:                           {}",
         unsafe_coarse.rejects
     );
-    println!(
-        "  economically important false prunes: {unsafe_false_prunes}"
-    );
-    println!(
-        "  false advances:                      {unsafe_false_advances}"
-    );
+    println!("  economically important false prunes: {unsafe_false_prunes}");
+    println!("  false advances:                      {unsafe_false_advances}");
     println!();
 
     println!("Correctness");
-    println!(
-        "  baseline matches oracle: {baseline_matches_oracle}"
-    );
-    println!(
-        "  pulse matches oracle:    {pulse_matches_oracle}"
-    );
-    println!(
-        "  decision agreement:      {decision_agreement}"
-    );
-    println!(
-        "  false important prunes:  {false_important_prunes}"
-    );
-    println!(
-        "  false advances:          {false_advances}"
-    );
+    println!("  baseline matches oracle: {baseline_matches_oracle}");
+    println!("  pulse matches oracle:    {pulse_matches_oracle}");
+    println!("  decision agreement:      {decision_agreement}");
+    println!("  false important prunes:  {false_important_prunes}");
+    println!("  false advances:          {false_advances}");
     println!(
         "  dangerous merges refused: {}",
         pulse.work.dangerous_merges_refused
@@ -845,10 +733,7 @@ fn main() {
     println!();
 
     println!("Decisions");
-    println!(
-        "  baseline ADVANCE: {}",
-        baseline.advances.len()
-    );
+    println!("  baseline ADVANCE: {}", baseline.advances.len());
     println!("  baseline REJECT:  {}", baseline.rejects);
     println!("  pulse ADVANCE:    {}", pulse.advances.len());
     println!("  pulse REJECT:     {}", pulse.rejects);
@@ -859,20 +744,13 @@ fn main() {
     print_work("Pulse work", &pulse.work);
     println!();
 
-    let baseline_expansions =
-        baseline.work.exact_expansions as f64;
-    let pulse_expansions =
-        pulse.work.exact_expansions as f64;
+    let baseline_expansions = baseline.work.exact_expansions as f64;
+    let pulse_expansions = pulse.work.exact_expansions as f64;
 
     let expansion_reduction =
-        100.0
-            * (baseline_expansions - pulse_expansions)
-            / baseline_expansions;
+        100.0 * (baseline_expansions - pulse_expansions) / baseline_expansions;
 
-    println!(
-        "Exact expansion reduction: {:.2}%",
-        expansion_reduction
-    );
+    println!("Exact expansion reduction: {:.2}%", expansion_reduction);
 
     let passed = fixture_valid
         && unsafe_false_prunes > 0
@@ -885,8 +763,7 @@ fn main() {
         && false_important_prunes == 0
         && false_advances == 0
         && baseline.rejects == pulse.rejects
-        && pulse.work.exact_expansions
-            < baseline.work.exact_expansions;
+        && pulse.work.exact_expansions < baseline.work.exact_expansions;
 
     println!();
 
