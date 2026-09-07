@@ -1,0 +1,38 @@
+name: Experiment Zero
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ez-m0a:
+    name: EZ-M0A — Compression Without Loss
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.80.0
+          components: rustfmt,clippy
+
+      - name: Verify formatting
+        run: cargo +1.80.0 fmt --all -- --check
+
+      - name: Compile
+        run: cargo +1.80.0 check --locked
+
+      - name: Run Clippy
+        run: cargo +1.80.0 clippy --locked --all-targets -- -D warnings
+
+      - name: Run EZ-M0A
+        run: cargo +1.80.0 run --locked --release
