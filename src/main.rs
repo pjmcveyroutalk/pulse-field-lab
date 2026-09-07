@@ -602,11 +602,9 @@ fn aba_reversal_count(world: &VisibleWorld) -> usize {
         let current_evidence = current_evidence_for_candidate(transformation_id, world);
 
         for quantity in world.min_quantity..=world.max_quantity {
-            let stale_decision =
-                evidence_decision(transformation_id, quantity, stale_evidence);
+            let stale_decision = evidence_decision(transformation_id, quantity, stale_evidence);
 
-            let current_decision =
-                evidence_decision(transformation_id, quantity, current_evidence);
+            let current_decision = evidence_decision(transformation_id, quantity, current_evidence);
 
             if stale_decision == Decision::Advance && current_decision == Decision::Reject {
                 reversals += 1;
@@ -619,7 +617,10 @@ fn aba_reversal_count(world: &VisibleWorld) -> usize {
 
 fn print_work(label: &str, work: &WorkCounter) {
     println!("{label}");
-    println!("  family evaluations:           {}", work.family_evaluations);
+    println!(
+        "  family evaluations:           {}",
+        work.family_evaluations
+    );
     println!("  family splits:                {}", work.family_splits);
     println!("  family rejections:            {}", work.family_rejections);
     println!("  family advances:              {}", work.family_advances);
