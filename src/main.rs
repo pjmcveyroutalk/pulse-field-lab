@@ -533,8 +533,7 @@ fn main() {
     let pulse_matches_oracle = pulse.decisions == current_oracle;
 
     let reduction_vs_dependency = 100.0
-        * (1.0 - pulse.work.exact_expansions as f64
-            / dependency_only.work.exact_expansions as f64);
+        * (1.0 - pulse.work.exact_expansions as f64 / dependency_only.work.exact_expansions as f64);
     let reduction_vs_global =
         100.0 * (1.0 - pulse.work.exact_expansions as f64 / global.work.exact_expansions as f64);
 
