@@ -11,7 +11,6 @@ const HIDDEN_CAPABILITY_BOUNDARY: usize = 25;
 const MIN_EDGE: i64 = 24;
 const MAX_EDGE: i64 = 30;
 const MIN_IMPACT: i64 = 1;
-const MAX_IMPACT: i64 = 3;
 const FIXED_COST: i64 = 20;
 
 const MERGE_REGION_EDGE_ADJUSTMENT: i64 = 20;
