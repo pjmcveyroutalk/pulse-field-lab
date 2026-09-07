@@ -142,10 +142,7 @@ fn transformation_impact(transformation_id: usize) -> i64 {
     MIN_IMPACT + (transformation_id % 3) as i64
 }
 
-fn current_evidence_for_candidate(
-    transformation_id: usize,
-    world: &VisibleWorld,
-) -> Evidence {
+fn current_evidence_for_candidate(transformation_id: usize, world: &VisibleWorld) -> Evidence {
     let edge_adjustment = if transformation_in_stale_region(transformation_id, world) {
         CURRENT_STALE_EDGE_ADJUSTMENT
     } else {
@@ -175,11 +172,7 @@ fn current_standard_evidence(world: &VisibleWorld) -> Evidence {
     }
 }
 
-fn candidate_profit(
-    transformation_id: usize,
-    quantity: usize,
-    evidence: Evidence,
-) -> i64 {
+fn candidate_profit(transformation_id: usize, quantity: usize, evidence: Evidence) -> i64 {
     let quantity = quantity as i64;
     let edge = transformation_edge(transformation_id) + evidence.edge_adjustment;
     let impact = transformation_impact(transformation_id);
@@ -276,17 +269,11 @@ fn run_baseline(world: &VisibleWorld) -> EngineResult {
     }
 }
 
-fn family_fully_in_stale_region(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-) -> bool {
+fn family_fully_in_stale_region(family: CandidateFamily, world: &VisibleWorld) -> bool {
     family.id_start >= world.stale_region_start && family.id_end <= world.stale_region_end
 }
 
-fn family_crosses_stale_boundary(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-) -> bool {
+fn family_crosses_stale_boundary(family: CandidateFamily, world: &VisibleWorld) -> bool {
     let crosses_start =
         family.id_start < world.stale_region_start && family.id_end > world.stale_region_start;
 
@@ -296,11 +283,7 @@ fn family_crosses_stale_boundary(
     crosses_start || crosses_end
 }
 
-fn proof_membrane_allows(
-    evidence: Evidence,
-    world: &VisibleWorld,
-    work: &mut WorkCounter,
-) -> bool {
+fn proof_membrane_allows(evidence: Evidence, world: &VisibleWorld, work: &mut WorkCounter) -> bool {
     work.proof_checks += 1;
     work.fact_accesses += 2;
 
@@ -431,11 +414,7 @@ fn split_family(family: CandidateFamily) -> (CandidateFamily, CandidateFamily) {
     }
 }
 
-fn resolve_exact_family(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-    result: &mut EngineResult,
-) {
+fn resolve_exact_family(family: CandidateFamily, world: &VisibleWorld, result: &mut EngineResult) {
     for transformation_id in family.id_start..family.id_end {
         for quantity in family.quantity_start..family.quantity_end {
             let key = CandidateKey {
@@ -455,18 +434,12 @@ fn resolve_exact_family(
     }
 }
 
-fn resolve_stale_family(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-    result: &mut EngineResult,
-) {
+fn resolve_stale_family(family: CandidateFamily, world: &VisibleWorld, result: &mut EngineResult) {
     let evidence = stale_cached_evidence(world);
 
-    let stale_advance_proof =
-        family_proven_advance(family, evidence, &mut result.work);
+    let stale_advance_proof = family_proven_advance(family, evidence, &mut result.work);
 
-    let allowed =
-        proof_membrane_allows(evidence, world, &mut result.work);
+    let allowed = proof_membrane_allows(evidence, world, &mut result.work);
 
     if stale_advance_proof && !allowed {
         result.work.stale_advance_proofs_blocked += 1;
@@ -487,11 +460,7 @@ fn resolve_stale_family(
     resolve_family(right, world, result);
 }
 
-fn resolve_fresh_family(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-    result: &mut EngineResult,
-) {
+fn resolve_fresh_family(family: CandidateFamily, world: &VisibleWorld, result: &mut EngineResult) {
     let evidence = current_standard_evidence(world);
 
     if family_proven_reject(family, evidence, &mut result.work)
@@ -514,11 +483,7 @@ fn resolve_fresh_family(
     resolve_family(right, world, result);
 }
 
-fn resolve_family(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-    result: &mut EngineResult,
-) {
+fn resolve_family(family: CandidateFamily, world: &VisibleWorld, result: &mut EngineResult) {
     if family.is_empty() {
         return;
     }
@@ -562,12 +527,10 @@ fn stale_reversal_count(world: &VisibleWorld) -> usize {
     let mut reversals = 0;
 
     for transformation_id in world.stale_region_start..world.stale_region_end {
-        let current_evidence =
-            current_evidence_for_candidate(transformation_id, world);
+        let current_evidence = current_evidence_for_candidate(transformation_id, world);
 
         for quantity in world.min_quantity..=world.max_quantity {
-            let stale_decision =
-                candidate_profit(transformation_id, quantity, stale_evidence) > 0;
+            let stale_decision = candidate_profit(transformation_id, quantity, stale_evidence) > 0;
 
             let current_decision =
                 candidate_profit(transformation_id, quantity, current_evidence) > 0;
@@ -587,7 +550,10 @@ fn print_work(label: &str, work: &WorkCounter) {
     println!("  family splits:               {}", work.family_splits);
     println!("  family rejections:           {}", work.family_rejections);
     println!("  exact expansions:            {}", work.exact_expansions);
-    println!("  economic evaluations:        {}", work.economic_evaluations);
+    println!(
+        "  economic evaluations:        {}",
+        work.economic_evaluations
+    );
     println!("  bound evaluations:           {}", work.bound_evaluations);
     println!("  fact accesses:                {}", work.fact_accesses);
     println!("  proof checks:                 {}", work.proof_checks);
@@ -626,15 +592,11 @@ fn main() {
     let baseline_matches_oracle = baseline.advances == oracle;
     let pulse_matches_oracle = pulse.advances == oracle;
     let decision_agreement = baseline.advances == pulse.advances;
-    let false_important_prunes =
-        oracle.difference(&pulse.advances).count();
+    let false_important_prunes = oracle.difference(&pulse.advances).count();
 
     println!("Fixture: EZ-004 — Stale Evidence");
     println!("Total candidate states: {total_candidate_states}");
-    println!(
-        "Authoritative generation: {}",
-        world.current_generation
-    );
+    println!("Authoritative generation: {}", world.current_generation);
     println!("Cached stale generation: {STALE_GENERATION}");
     println!("Stale reversal count: {reversals}");
     println!("Oracle ADVANCE count: {}", oracle.len());
@@ -669,10 +631,7 @@ fn main() {
     let expansion_reduction =
         100.0 * (baseline_expansions - pulse_expansions) / baseline_expansions;
 
-    println!(
-        "Exact expansion reduction: {:.2}%",
-        expansion_reduction
-    );
+    println!("Exact expansion reduction: {:.2}%", expansion_reduction);
 
     let passed = reversals > 0
         && pulse.work.stale_proofs_blocked > 0
