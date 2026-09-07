@@ -4,13 +4,15 @@ const TRANSFORMATION_COUNT: usize = 100;
 const MIN_QUANTITY: usize = 1;
 const MAX_QUANTITY: usize = 100;
 
-const ABA_REGION_START: usize = 40;
-const ABA_REGION_END: usize = 50;
+const TIME_REGION_START: usize = 20;
+const TIME_REGION_END: usize = 30;
 
-const GENERATION_A_OLD: u64 = 1;
-const GENERATION_B: u64 = 2;
-const GENERATION_A_CURRENT: u64 = 3;
+const CACHED_OBSERVED_SLOT: u64 = 100;
+const EXECUTION_DEADLINE_SLOT: u64 = 120;
+const CURRENT_PROTOCOL_SLOT: u64 = 140;
+
 const MARKET_DEPENDENCY_ID: u64 = 1;
+const ACCOUNT_DIGEST: u64 = 0xA11CE;
 
 const MIN_EDGE: i64 = 24;
 const MAX_EDGE: i64 = 30;
@@ -18,19 +20,13 @@ const MIN_IMPACT: i64 = 1;
 const MAX_IMPACT: i64 = 3;
 const FIXED_COST: i64 = 20;
 
-const ABA_EDGE_ADJUSTMENT: i64 = 20;
+const TIME_REGION_EDGE_ADJUSTMENT: i64 = 20;
 const EXACT_FAMILY_POINT_LIMIT: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Decision {
     Advance,
     Reject,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StateMarker {
-    A,
-    B,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -42,9 +38,9 @@ struct CandidateKey {
 #[derive(Debug, Clone, Copy)]
 struct Evidence {
     dependency_id: u64,
-    generation: u64,
-    marker: StateMarker,
-    execution_enabled: bool,
+    account_digest: u64,
+    observed_slot: u64,
+    valid_until_slot: u64,
     edge_adjustment: i64,
 }
 
@@ -53,11 +49,11 @@ struct VisibleWorld {
     transformation_count: usize,
     min_quantity: usize,
     max_quantity: usize,
-    aba_region_start: usize,
-    aba_region_end: usize,
+    time_region_start: usize,
+    time_region_end: usize,
     dependency_id: u64,
-    current_generation: u64,
-    current_marker: StateMarker,
+    account_digest: u64,
+    current_protocol_slot: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -89,9 +85,9 @@ struct WorkCounter {
     fact_accesses: u64,
     bound_evaluations: u64,
     proof_checks: u64,
-    stale_proofs_blocked: u64,
-    stale_advance_proofs_blocked: u64,
-    aba_value_only_false_accepts: u64,
+    expired_proofs_blocked: u64,
+    expired_advance_proofs_blocked: u64,
+    byte_only_false_accepts: u64,
     fresh_proof_authorizations: u64,
     stale_authorized_decisions: u64,
 }
@@ -134,16 +130,16 @@ fn visible_world() -> VisibleWorld {
         transformation_count: TRANSFORMATION_COUNT,
         min_quantity: MIN_QUANTITY,
         max_quantity: MAX_QUANTITY,
-        aba_region_start: ABA_REGION_START,
-        aba_region_end: ABA_REGION_END,
+        time_region_start: TIME_REGION_START,
+        time_region_end: TIME_REGION_END,
         dependency_id: MARKET_DEPENDENCY_ID,
-        current_generation: GENERATION_A_CURRENT,
-        current_marker: StateMarker::A,
+        account_digest: ACCOUNT_DIGEST,
+        current_protocol_slot: CURRENT_PROTOCOL_SLOT,
     }
 }
 
-fn transformation_in_aba_region(transformation_id: usize, world: &VisibleWorld) -> bool {
-    transformation_id >= world.aba_region_start && transformation_id < world.aba_region_end
+fn transformation_in_time_region(transformation_id: usize, world: &VisibleWorld) -> bool {
+    transformation_id >= world.time_region_start && transformation_id < world.time_region_end
 }
 
 fn transformation_edge(transformation_id: usize) -> i64 {
@@ -154,42 +150,54 @@ fn transformation_impact(transformation_id: usize) -> i64 {
     MIN_IMPACT + (transformation_id % 3) as i64
 }
 
-fn current_evidence_for_candidate(transformation_id: usize, world: &VisibleWorld) -> Evidence {
-    if transformation_in_aba_region(transformation_id, world) {
-        Evidence {
-            dependency_id: world.dependency_id,
-            generation: world.current_generation,
-            marker: world.current_marker,
-            execution_enabled: false,
-            edge_adjustment: ABA_EDGE_ADJUSTMENT,
-        }
+fn protocol_capability_enabled(
+    transformation_id: usize,
+    protocol_slot: u64,
+    world: &VisibleWorld,
+) -> bool {
+    if transformation_in_time_region(transformation_id, world) {
+        protocol_slot <= EXECUTION_DEADLINE_SLOT
     } else {
-        Evidence {
-            dependency_id: world.dependency_id,
-            generation: world.current_generation,
-            marker: world.current_marker,
-            execution_enabled: true,
-            edge_adjustment: 0,
-        }
+        true
     }
 }
 
-fn old_a_cached_evidence(world: &VisibleWorld) -> Evidence {
+fn current_evidence_for_candidate(transformation_id: usize, world: &VisibleWorld) -> Evidence {
+    let in_time_region = transformation_in_time_region(transformation_id, world);
+
     Evidence {
         dependency_id: world.dependency_id,
-        generation: GENERATION_A_OLD,
-        marker: StateMarker::A,
-        execution_enabled: true,
-        edge_adjustment: ABA_EDGE_ADJUSTMENT,
+        account_digest: world.account_digest,
+        observed_slot: world.current_protocol_slot,
+        valid_until_slot: if in_time_region {
+            EXECUTION_DEADLINE_SLOT
+        } else {
+            u64::MAX
+        },
+        edge_adjustment: if in_time_region {
+            TIME_REGION_EDGE_ADJUSTMENT
+        } else {
+            0
+        },
+    }
+}
+
+fn cached_time_evidence(world: &VisibleWorld) -> Evidence {
+    Evidence {
+        dependency_id: world.dependency_id,
+        account_digest: world.account_digest,
+        observed_slot: CACHED_OBSERVED_SLOT,
+        valid_until_slot: EXECUTION_DEADLINE_SLOT,
+        edge_adjustment: TIME_REGION_EDGE_ADJUSTMENT,
     }
 }
 
 fn current_standard_evidence(world: &VisibleWorld) -> Evidence {
     Evidence {
         dependency_id: world.dependency_id,
-        generation: world.current_generation,
-        marker: world.current_marker,
-        execution_enabled: true,
+        account_digest: world.account_digest,
+        observed_slot: world.current_protocol_slot,
+        valid_until_slot: u64::MAX,
         edge_adjustment: 0,
     }
 }
@@ -202,8 +210,17 @@ fn candidate_profit(transformation_id: usize, quantity: usize, evidence: Evidenc
     quantity * edge - impact * quantity * quantity - FIXED_COST
 }
 
-fn evidence_decision(transformation_id: usize, quantity: usize, evidence: Evidence) -> Decision {
-    if evidence.execution_enabled && candidate_profit(transformation_id, quantity, evidence) > 0 {
+fn decision_at_protocol_slot(
+    transformation_id: usize,
+    quantity: usize,
+    evidence: Evidence,
+    protocol_slot: u64,
+    world: &VisibleWorld,
+) -> Decision {
+    let capability_enabled =
+        protocol_capability_enabled(transformation_id, protocol_slot, world);
+
+    if capability_enabled && candidate_profit(transformation_id, quantity, evidence) > 0 {
         Decision::Advance
     } else {
         Decision::Reject
@@ -229,7 +246,11 @@ fn oracle_candidate(
             transformation_id,
             quantity,
         },
-        execution_enabled: evidence.execution_enabled,
+        execution_enabled: protocol_capability_enabled(
+            transformation_id,
+            world.current_protocol_slot,
+            world,
+        ),
         gross_value: quantity_i64 * edge,
         cost: impact * quantity_i64 * quantity_i64 + FIXED_COST,
     }
@@ -243,11 +264,17 @@ fn evaluate_exact(
 ) -> Decision {
     work.exact_expansions += 1;
     work.economic_evaluations += 1;
-    work.fact_accesses += 6;
+    work.fact_accesses += 7;
 
     let evidence = current_evidence_for_candidate(transformation_id, world);
 
-    evidence_decision(transformation_id, quantity, evidence)
+    decision_at_protocol_slot(
+        transformation_id,
+        quantity,
+        evidence,
+        world.current_protocol_slot,
+        world,
+    )
 }
 
 fn run_oracle(world: &VisibleWorld) -> BTreeSet<CandidateKey> {
@@ -296,36 +323,39 @@ fn run_baseline(world: &VisibleWorld) -> EngineResult {
     }
 }
 
-fn family_fully_in_aba_region(family: CandidateFamily, world: &VisibleWorld) -> bool {
-    family.id_start >= world.aba_region_start && family.id_end <= world.aba_region_end
+fn family_fully_in_time_region(family: CandidateFamily, world: &VisibleWorld) -> bool {
+    family.id_start >= world.time_region_start && family.id_end <= world.time_region_end
 }
 
-fn family_crosses_aba_boundary(family: CandidateFamily, world: &VisibleWorld) -> bool {
+fn family_crosses_time_boundary(family: CandidateFamily, world: &VisibleWorld) -> bool {
     let crosses_start =
-        family.id_start < world.aba_region_start && family.id_end > world.aba_region_start;
+        family.id_start < world.time_region_start && family.id_end > world.time_region_start;
 
     let crosses_end =
-        family.id_start < world.aba_region_end && family.id_end > world.aba_region_end;
+        family.id_start < world.time_region_end && family.id_end > world.time_region_end;
 
     crosses_start || crosses_end
 }
 
-fn value_only_membrane_allows(evidence: Evidence, world: &VisibleWorld) -> bool {
-    evidence.dependency_id == world.dependency_id && evidence.marker == world.current_marker
+fn byte_only_membrane_allows(evidence: Evidence, world: &VisibleWorld) -> bool {
+    evidence.dependency_id == world.dependency_id
+        && evidence.account_digest == world.account_digest
 }
 
 fn proof_membrane_allows(evidence: Evidence, world: &VisibleWorld, work: &mut WorkCounter) -> bool {
     work.proof_checks += 1;
-    work.fact_accesses += 3;
+    work.fact_accesses += 4;
 
     let dependency_matches = evidence.dependency_id == world.dependency_id;
-    let generation_matches = evidence.generation == world.current_generation;
-    let marker_matches = evidence.marker == world.current_marker;
+    let bytes_match = evidence.account_digest == world.account_digest;
+    let evidence_was_valid = evidence.observed_slot <= evidence.valid_until_slot;
+    let evidence_still_valid = world.current_protocol_slot <= evidence.valid_until_slot;
 
-    let allowed = dependency_matches && generation_matches && marker_matches;
+    let allowed =
+        dependency_matches && bytes_match && evidence_was_valid && evidence_still_valid;
 
     if !allowed {
-        work.stale_proofs_blocked += 1;
+        work.expired_proofs_blocked += 1;
     }
 
     allowed
@@ -354,10 +384,6 @@ fn family_optimistic_profit_upper_bound(
     work.economic_evaluations += 1;
     work.bound_evaluations += 1;
     work.fact_accesses += 4;
-
-    if !evidence.execution_enabled {
-        return i64::MIN;
-    }
 
     let first_quantity = family.quantity_start;
     let last_quantity = family.quantity_end - 1;
@@ -388,7 +414,7 @@ fn family_pessimistic_profit_lower_bound(
     work.bound_evaluations += 1;
     work.fact_accesses += 4;
 
-    if !evidence.execution_enabled {
+    if evidence.observed_slot > evidence.valid_until_slot {
         return i64::MIN;
     }
 
@@ -475,7 +501,7 @@ fn resolve_exact_family(family: CandidateFamily, world: &VisibleWorld, result: &
     }
 }
 
-fn emit_stale_family_advance(family: CandidateFamily, result: &mut EngineResult) {
+fn emit_expired_family_advance(family: CandidateFamily, result: &mut EngineResult) {
     result.work.family_advances += 1;
     result.work.stale_authorized_decisions += family.point_count() as u64;
 
@@ -489,22 +515,27 @@ fn emit_stale_family_advance(family: CandidateFamily, result: &mut EngineResult)
     }
 }
 
-fn resolve_aba_family(family: CandidateFamily, world: &VisibleWorld, result: &mut EngineResult) {
-    let evidence = old_a_cached_evidence(world);
-    let stale_advance_proof = family_proven_advance(family, evidence, &mut result.work);
+fn resolve_time_sensitive_family(
+    family: CandidateFamily,
+    world: &VisibleWorld,
+    result: &mut EngineResult,
+) {
+    let evidence = cached_time_evidence(world);
+    let expired_advance_proof =
+        family_proven_advance(family, evidence, &mut result.work);
 
-    if stale_advance_proof && value_only_membrane_allows(evidence, world) {
-        result.work.aba_value_only_false_accepts += family.point_count() as u64;
+    if expired_advance_proof && byte_only_membrane_allows(evidence, world) {
+        result.work.byte_only_false_accepts += family.point_count() as u64;
     }
 
     let allowed = proof_membrane_allows(evidence, world, &mut result.work);
 
-    if stale_advance_proof && !allowed {
-        result.work.stale_advance_proofs_blocked += 1;
+    if expired_advance_proof && !allowed {
+        result.work.expired_advance_proofs_blocked += 1;
     }
 
-    if stale_advance_proof && allowed {
-        emit_stale_family_advance(family, result);
+    if expired_advance_proof && allowed {
+        emit_expired_family_advance(family, result);
         return;
     }
 
@@ -547,7 +578,7 @@ fn resolve_family(family: CandidateFamily, world: &VisibleWorld, result: &mut En
         return;
     }
 
-    if family_crosses_aba_boundary(family, world) && family.id_len() > 1 {
+    if family_crosses_time_boundary(family, world) && family.id_len() > 1 {
         result.work.family_splits += 1;
         let (left, right) = split_family(family);
         resolve_family(left, world, result);
@@ -555,8 +586,8 @@ fn resolve_family(family: CandidateFamily, world: &VisibleWorld, result: &mut En
         return;
     }
 
-    if family_fully_in_aba_region(family, world) {
-        resolve_aba_family(family, world, result);
+    if family_fully_in_time_region(family, world) {
+        resolve_time_sensitive_family(family, world, result);
     } else {
         resolve_fresh_family(family, world, result);
     }
@@ -581,32 +612,42 @@ fn run_pulse(world: &VisibleWorld) -> EngineResult {
     result
 }
 
-fn aba_lifecycle_is_valid() -> bool {
-    let lifecycle = [
-        (GENERATION_A_OLD, StateMarker::A),
-        (GENERATION_B, StateMarker::B),
-        (GENERATION_A_CURRENT, StateMarker::A),
-    ];
+fn protocol_time_fixture_is_valid(world: &VisibleWorld) -> bool {
+    let cached = cached_time_evidence(world);
+    let current = current_evidence_for_candidate(world.time_region_start, world);
 
-    lifecycle[0].0 < lifecycle[1].0
-        && lifecycle[1].0 < lifecycle[2].0
-        && lifecycle[0].1 == lifecycle[2].1
-        && lifecycle[0].1 != lifecycle[1].1
+    cached.observed_slot <= cached.valid_until_slot
+        && world.current_protocol_slot > cached.valid_until_slot
+        && cached.account_digest == current.account_digest
+        && cached.dependency_id == current.dependency_id
+        && cached.edge_adjustment == current.edge_adjustment
 }
 
-fn aba_reversal_count(world: &VisibleWorld) -> usize {
-    let stale_evidence = old_a_cached_evidence(world);
+fn protocol_time_reversal_count(world: &VisibleWorld) -> usize {
+    let cached_evidence = cached_time_evidence(world);
     let mut reversals = 0;
 
-    for transformation_id in world.aba_region_start..world.aba_region_end {
+    for transformation_id in world.time_region_start..world.time_region_end {
         let current_evidence = current_evidence_for_candidate(transformation_id, world);
 
         for quantity in world.min_quantity..=world.max_quantity {
-            let stale_decision = evidence_decision(transformation_id, quantity, stale_evidence);
+            let cached_decision = decision_at_protocol_slot(
+                transformation_id,
+                quantity,
+                cached_evidence,
+                cached_evidence.observed_slot,
+                world,
+            );
 
-            let current_decision = evidence_decision(transformation_id, quantity, current_evidence);
+            let current_decision = decision_at_protocol_slot(
+                transformation_id,
+                quantity,
+                current_evidence,
+                world.current_protocol_slot,
+                world,
+            );
 
-            if stale_decision == Decision::Advance && current_decision == Decision::Reject {
+            if cached_decision == Decision::Advance && current_decision == Decision::Reject {
                 reversals += 1;
             }
         }
@@ -633,16 +674,16 @@ fn print_work(label: &str, work: &WorkCounter) {
     println!("  fact accesses:                 {}", work.fact_accesses);
     println!("  proof checks:                  {}", work.proof_checks);
     println!(
-        "  stale proofs blocked:          {}",
-        work.stale_proofs_blocked
+        "  expired proofs blocked:        {}",
+        work.expired_proofs_blocked
     );
     println!(
-        "  stale ADVANCE proofs blocked:  {}",
-        work.stale_advance_proofs_blocked
+        "  expired ADVANCE proofs blocked:{}",
+        work.expired_advance_proofs_blocked
     );
     println!(
-        "  ABA value-only false accepts:  {}",
-        work.aba_value_only_false_accepts
+        "  byte-only false accepts:       {}",
+        work.byte_only_false_accepts
     );
     println!(
         "  fresh proof authorizations:    {}",
@@ -667,21 +708,21 @@ fn main() {
     let total_candidate_states =
         world.transformation_count * (world.max_quantity - world.min_quantity + 1);
 
-    let lifecycle_valid = aba_lifecycle_is_valid();
-    let reversals = aba_reversal_count(&world);
+    let fixture_valid = protocol_time_fixture_is_valid(&world);
+    let reversals = protocol_time_reversal_count(&world);
     let baseline_matches_oracle = baseline.advances == oracle;
     let pulse_matches_oracle = pulse.advances == oracle;
     let decision_agreement = baseline.advances == pulse.advances;
     let false_important_prunes = oracle.difference(&pulse.advances).count();
 
-    println!("Fixture: EZ-005 — Generations / ABA");
+    println!("Fixture: EZ-006 — Protocol Time Without Bytes");
     println!("Total candidate states: {total_candidate_states}");
-    println!("Lifecycle: A(gen 1) -> B(gen 2) -> A(gen 3)");
-    println!("ABA lifecycle valid: {lifecycle_valid}");
-    println!("Current generation: {}", world.current_generation);
-    println!("Cached proof generation: {GENERATION_A_OLD}");
-    println!("Current visible marker: {:?}", world.current_marker);
-    println!("ABA reversal count: {reversals}");
+    println!("Cached observed slot: {CACHED_OBSERVED_SLOT}");
+    println!("Execution deadline slot: {EXECUTION_DEADLINE_SLOT}");
+    println!("Current protocol slot: {}", world.current_protocol_slot);
+    println!("Account digest unchanged: {ACCOUNT_DIGEST:#X}");
+    println!("Protocol-time fixture valid: {fixture_valid}");
+    println!("Protocol-time reversal count: {reversals}");
     println!("Oracle ADVANCE count: {}", oracle.len());
     println!();
 
@@ -691,11 +732,11 @@ fn main() {
     println!("  decision agreement:      {decision_agreement}");
     println!("  false important prunes:  {false_important_prunes}");
     println!(
-        "  ABA value-only false accepts: {}",
-        pulse.work.aba_value_only_false_accepts
+        "  byte-only false accepts:     {}",
+        pulse.work.byte_only_false_accepts
     );
     println!(
-        "  stale-authorized decisions:   {}",
+        "  stale-authorized decisions:  {}",
         pulse.work.stale_authorized_decisions
     );
     println!();
@@ -720,11 +761,11 @@ fn main() {
 
     println!("Exact expansion reduction: {:.2}%", expansion_reduction);
 
-    let passed = lifecycle_valid
+    let passed = fixture_valid
         && reversals > 0
-        && pulse.work.aba_value_only_false_accepts > 0
-        && pulse.work.stale_proofs_blocked > 0
-        && pulse.work.stale_advance_proofs_blocked > 0
+        && pulse.work.byte_only_false_accepts > 0
+        && pulse.work.expired_proofs_blocked > 0
+        && pulse.work.expired_advance_proofs_blocked > 0
         && pulse.work.stale_authorized_decisions == 0
         && baseline_matches_oracle
         && pulse_matches_oracle
@@ -735,9 +776,9 @@ fn main() {
     println!();
 
     if passed {
-        println!("EZ-005 CORRECTNESS GATE: PASS");
+        println!("EZ-006 CORRECTNESS GATE: PASS");
     } else {
-        println!("EZ-005 CORRECTNESS GATE: FAIL");
+        println!("EZ-006 CORRECTNESS GATE: FAIL");
         std::process::exit(1);
     }
 }
