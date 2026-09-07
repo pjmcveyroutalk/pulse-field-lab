@@ -196,10 +196,7 @@ fn print_work(label: &str, work: &WorkCounter) {
     println!("{label}");
     println!("  family evaluations:     {}", work.family_evaluations);
     println!("  exact expansions:       {}", work.exact_expansions);
-    println!(
-        "  constraint evaluations: {}",
-        work.constraint_evaluations
-    );
+    println!("  constraint evaluations: {}", work.constraint_evaluations);
     println!("  economic evaluations:   {}", work.economic_evaluations);
     println!("  fact accesses:           {}", work.fact_accesses);
 }
@@ -249,10 +246,7 @@ fn main() {
     let expansion_reduction =
         100.0 * (baseline_expansions - pulse_expansions) / baseline_expansions;
 
-    println!(
-        "Exact expansion reduction: {:.2}%",
-        expansion_reduction
-    );
+    println!("Exact expansion reduction: {:.2}%", expansion_reduction);
 
     let passed = baseline_matches_oracle
         && pulse_matches_oracle
