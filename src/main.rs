@@ -112,15 +112,11 @@ fn phase_b_world() -> World {
 }
 
 fn in_region(transformation_id: usize, start: usize, end: usize) -> bool {
-    transformation_id >= start && transformation_id < end
+    (start..end).contains(&transformation_id)
 }
 
 fn in_novelty_region(transformation_id: usize) -> bool {
-    in_region(
-        transformation_id,
-        NOVELTY_REGION_START,
-        NOVELTY_REGION_END,
-    )
+    in_region(transformation_id, NOVELTY_REGION_START, NOVELTY_REGION_END)
 }
 
 fn in_sensitive_region(transformation_id: usize) -> bool {
@@ -295,11 +291,7 @@ fn family_optimistic_profit_upper_bound(
     first_profit.max(last_profit).max(vertex_profit)
 }
 
-fn family_proven_reject(
-    family: CandidateFamily,
-    world: &World,
-    work: &mut WorkCounter,
-) -> bool {
+fn family_proven_reject(family: CandidateFamily, world: &World, work: &mut WorkCounter) -> bool {
     family_optimistic_profit_upper_bound(family, world, work) <= 0
 }
 
@@ -444,10 +436,7 @@ fn resolve_family(
     resolve_exact_family(family, world, result);
 }
 
-fn run_pulse(
-    world: &World,
-    cached_certificate: SafeIgnoranceCertificate,
-) -> EngineResult {
+fn run_pulse(world: &World, cached_certificate: SafeIgnoranceCertificate) -> EngineResult {
     let mut result = EngineResult {
         advances: BTreeSet::new(),
         rejects: 0,
@@ -554,10 +543,7 @@ fn print_work(label: &str, work: &WorkCounter) {
     println!("  semantic splits:          {}", work.semantic_splits);
     println!("  family rejections:        {}", work.family_rejections);
     println!("  exact expansions:         {}", work.exact_expansions);
-    println!(
-        "  economic evaluations:     {}",
-        work.economic_evaluations
-    );
+    println!("  economic evaluations:     {}", work.economic_evaluations);
     println!("  bound evaluations:        {}", work.bound_evaluations);
     println!("  fact accesses:            {}", work.fact_accesses);
     println!("  certificate checks:       {}", work.certificate_checks);
@@ -567,10 +553,7 @@ fn print_work(label: &str, work: &WorkCounter) {
         "  certificates invalidated: {}",
         work.certificates_invalidated
     );
-    println!(
-        "  reactivated points:       {}",
-        work.reactivated_points
-    );
+    println!("  reactivated points:       {}", work.reactivated_points);
 }
 
 fn main() {
@@ -613,14 +596,8 @@ fn main() {
         "Sensitive region: {}..{}",
         SENSITIVE_REGION_START, SENSITIVE_REGION_END
     );
-    println!(
-        "Phase A novelty generation: {}",
-        phase_a.novelty_generation
-    );
-    println!(
-        "Phase B novelty generation: {}",
-        phase_b.novelty_generation
-    );
+    println!("Phase A novelty generation: {}", phase_a.novelty_generation);
+    println!("Phase B novelty generation: {}", phase_b.novelty_generation);
     println!("Phase A Safe Ignorance certificate valid: {phase_a_certificate_valid}");
     println!("Novelty break is decision relevant: {novelty_break_relevant}");
     println!("Phase A novelty-region ADVANCE count: {novelty_advances_a}");
@@ -637,9 +614,7 @@ fn main() {
     println!("  exact expansions:        {}", unsafe_b.exact_expansions);
     println!("  ADVANCE:                 {}", unsafe_b.advances.len());
     println!("  REJECT:                  {}", unsafe_b.rejects);
-    println!(
-        "  execution-relevant false suppression: {unsafe_false_suppressions}"
-    );
+    println!("  execution-relevant false suppression: {unsafe_false_suppressions}");
     println!("  false advances:                      {unsafe_false_advances}");
     println!();
 
@@ -673,8 +648,7 @@ fn main() {
 
     let eager_expansions = eager_b.work.exact_expansions as f64;
     let pulse_expansions = pulse_b.work.exact_expansions as f64;
-    let expansion_reduction =
-        100.0 * (eager_expansions - pulse_expansions) / eager_expansions;
+    let expansion_reduction = 100.0 * (eager_expansions - pulse_expansions) / eager_expansions;
 
     println!("Exact expansion reduction: {:.2}%", expansion_reduction);
 
