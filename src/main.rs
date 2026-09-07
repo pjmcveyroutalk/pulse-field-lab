@@ -4,11 +4,12 @@ const TRANSFORMATION_COUNT: usize = 100;
 const MIN_QUANTITY: usize = 1;
 const MAX_QUANTITY: usize = 100;
 
-const STALE_REGION_START: usize = 70;
-const STALE_REGION_END: usize = 80;
+const ABA_REGION_START: usize = 40;
+const ABA_REGION_END: usize = 50;
 
-const CURRENT_GENERATION: u64 = 2;
-const STALE_GENERATION: u64 = 1;
+const GENERATION_A_OLD: u64 = 1;
+const GENERATION_B: u64 = 2;
+const GENERATION_A_CURRENT: u64 = 3;
 const MARKET_DEPENDENCY_ID: u64 = 1;
 
 const MIN_EDGE: i64 = 24;
@@ -17,15 +18,19 @@ const MIN_IMPACT: i64 = 1;
 const MAX_IMPACT: i64 = 3;
 const FIXED_COST: i64 = 20;
 
-const STALE_EDGE_ADJUSTMENT: i64 = 20;
-const CURRENT_STALE_EDGE_ADJUSTMENT: i64 = -24;
-
+const ABA_EDGE_ADJUSTMENT: i64 = 20;
 const EXACT_FAMILY_POINT_LIMIT: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Decision {
     Advance,
     Reject,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StateMarker {
+    A,
+    B,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -38,6 +43,8 @@ struct CandidateKey {
 struct Evidence {
     dependency_id: u64,
     generation: u64,
+    marker: StateMarker,
+    execution_enabled: bool,
     edge_adjustment: i64,
 }
 
@@ -46,22 +53,24 @@ struct VisibleWorld {
     transformation_count: usize,
     min_quantity: usize,
     max_quantity: usize,
-    stale_region_start: usize,
-    stale_region_end: usize,
+    aba_region_start: usize,
+    aba_region_end: usize,
     dependency_id: u64,
     current_generation: u64,
+    current_marker: StateMarker,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct OracleCandidate {
     key: CandidateKey,
+    execution_enabled: bool,
     gross_value: i64,
     cost: i64,
 }
 
 impl OracleCandidate {
     fn decision(self) -> Decision {
-        if self.gross_value - self.cost > 0 {
+        if self.execution_enabled && self.gross_value - self.cost > 0 {
             Decision::Advance
         } else {
             Decision::Reject
@@ -74,6 +83,7 @@ struct WorkCounter {
     family_evaluations: u64,
     family_splits: u64,
     family_rejections: u64,
+    family_advances: u64,
     exact_expansions: u64,
     economic_evaluations: u64,
     fact_accesses: u64,
@@ -81,6 +91,7 @@ struct WorkCounter {
     proof_checks: u64,
     stale_proofs_blocked: u64,
     stale_advance_proofs_blocked: u64,
+    aba_value_only_false_accepts: u64,
     fresh_proof_authorizations: u64,
     stale_authorized_decisions: u64,
 }
@@ -123,15 +134,16 @@ fn visible_world() -> VisibleWorld {
         transformation_count: TRANSFORMATION_COUNT,
         min_quantity: MIN_QUANTITY,
         max_quantity: MAX_QUANTITY,
-        stale_region_start: STALE_REGION_START,
-        stale_region_end: STALE_REGION_END,
+        aba_region_start: ABA_REGION_START,
+        aba_region_end: ABA_REGION_END,
         dependency_id: MARKET_DEPENDENCY_ID,
-        current_generation: CURRENT_GENERATION,
+        current_generation: GENERATION_A_CURRENT,
+        current_marker: StateMarker::A,
     }
 }
 
-fn transformation_in_stale_region(transformation_id: usize, world: &VisibleWorld) -> bool {
-    transformation_id >= world.stale_region_start && transformation_id < world.stale_region_end
+fn transformation_in_aba_region(transformation_id: usize, world: &VisibleWorld) -> bool {
+    transformation_id >= world.aba_region_start && transformation_id < world.aba_region_end
 }
 
 fn transformation_edge(transformation_id: usize) -> i64 {
@@ -143,24 +155,32 @@ fn transformation_impact(transformation_id: usize) -> i64 {
 }
 
 fn current_evidence_for_candidate(transformation_id: usize, world: &VisibleWorld) -> Evidence {
-    let edge_adjustment = if transformation_in_stale_region(transformation_id, world) {
-        CURRENT_STALE_EDGE_ADJUSTMENT
+    if transformation_in_aba_region(transformation_id, world) {
+        Evidence {
+            dependency_id: world.dependency_id,
+            generation: world.current_generation,
+            marker: world.current_marker,
+            execution_enabled: false,
+            edge_adjustment: ABA_EDGE_ADJUSTMENT,
+        }
     } else {
-        0
-    };
-
-    Evidence {
-        dependency_id: world.dependency_id,
-        generation: world.current_generation,
-        edge_adjustment,
+        Evidence {
+            dependency_id: world.dependency_id,
+            generation: world.current_generation,
+            marker: world.current_marker,
+            execution_enabled: true,
+            edge_adjustment: 0,
+        }
     }
 }
 
-fn stale_cached_evidence(world: &VisibleWorld) -> Evidence {
+fn old_a_cached_evidence(world: &VisibleWorld) -> Evidence {
     Evidence {
         dependency_id: world.dependency_id,
-        generation: STALE_GENERATION,
-        edge_adjustment: STALE_EDGE_ADJUSTMENT,
+        generation: GENERATION_A_OLD,
+        marker: StateMarker::A,
+        execution_enabled: true,
+        edge_adjustment: ABA_EDGE_ADJUSTMENT,
     }
 }
 
@@ -168,6 +188,8 @@ fn current_standard_evidence(world: &VisibleWorld) -> Evidence {
     Evidence {
         dependency_id: world.dependency_id,
         generation: world.current_generation,
+        marker: world.current_marker,
+        execution_enabled: true,
         edge_adjustment: 0,
     }
 }
@@ -178,6 +200,14 @@ fn candidate_profit(transformation_id: usize, quantity: usize, evidence: Evidenc
     let impact = transformation_impact(transformation_id);
 
     quantity * edge - impact * quantity * quantity - FIXED_COST
+}
+
+fn evidence_decision(transformation_id: usize, quantity: usize, evidence: Evidence) -> Decision {
+    if evidence.execution_enabled && candidate_profit(transformation_id, quantity, evidence) > 0 {
+        Decision::Advance
+    } else {
+        Decision::Reject
+    }
 }
 
 fn oracle_candidate(
@@ -199,6 +229,7 @@ fn oracle_candidate(
             transformation_id,
             quantity,
         },
+        execution_enabled: evidence.execution_enabled,
         gross_value: quantity_i64 * edge,
         cost: impact * quantity_i64 * quantity_i64 + FIXED_COST,
     }
@@ -212,15 +243,11 @@ fn evaluate_exact(
 ) -> Decision {
     work.exact_expansions += 1;
     work.economic_evaluations += 1;
-    work.fact_accesses += 5;
+    work.fact_accesses += 6;
 
     let evidence = current_evidence_for_candidate(transformation_id, world);
 
-    if candidate_profit(transformation_id, quantity, evidence) > 0 {
-        Decision::Advance
-    } else {
-        Decision::Reject
-    }
+    evidence_decision(transformation_id, quantity, evidence)
 }
 
 fn run_oracle(world: &VisibleWorld) -> BTreeSet<CandidateKey> {
@@ -269,27 +296,33 @@ fn run_baseline(world: &VisibleWorld) -> EngineResult {
     }
 }
 
-fn family_fully_in_stale_region(family: CandidateFamily, world: &VisibleWorld) -> bool {
-    family.id_start >= world.stale_region_start && family.id_end <= world.stale_region_end
+fn family_fully_in_aba_region(family: CandidateFamily, world: &VisibleWorld) -> bool {
+    family.id_start >= world.aba_region_start && family.id_end <= world.aba_region_end
 }
 
-fn family_crosses_stale_boundary(family: CandidateFamily, world: &VisibleWorld) -> bool {
+fn family_crosses_aba_boundary(family: CandidateFamily, world: &VisibleWorld) -> bool {
     let crosses_start =
-        family.id_start < world.stale_region_start && family.id_end > world.stale_region_start;
+        family.id_start < world.aba_region_start && family.id_end > world.aba_region_start;
 
     let crosses_end =
-        family.id_start < world.stale_region_end && family.id_end > world.stale_region_end;
+        family.id_start < world.aba_region_end && family.id_end > world.aba_region_end;
 
     crosses_start || crosses_end
 }
 
+fn value_only_membrane_allows(evidence: Evidence, world: &VisibleWorld) -> bool {
+    evidence.dependency_id == world.dependency_id && evidence.marker == world.current_marker
+}
+
 fn proof_membrane_allows(evidence: Evidence, world: &VisibleWorld, work: &mut WorkCounter) -> bool {
     work.proof_checks += 1;
-    work.fact_accesses += 2;
+    work.fact_accesses += 3;
 
     let dependency_matches = evidence.dependency_id == world.dependency_id;
     let generation_matches = evidence.generation == world.current_generation;
-    let allowed = dependency_matches && generation_matches;
+    let marker_matches = evidence.marker == world.current_marker;
+
+    let allowed = dependency_matches && generation_matches && marker_matches;
 
     if !allowed {
         work.stale_proofs_blocked += 1;
@@ -320,7 +353,11 @@ fn family_optimistic_profit_upper_bound(
     work.family_evaluations += 1;
     work.economic_evaluations += 1;
     work.bound_evaluations += 1;
-    work.fact_accesses += 3;
+    work.fact_accesses += 4;
+
+    if !evidence.execution_enabled {
+        return i64::MIN;
+    }
 
     let first_quantity = family.quantity_start;
     let last_quantity = family.quantity_end - 1;
@@ -349,7 +386,11 @@ fn family_pessimistic_profit_lower_bound(
     work.family_evaluations += 1;
     work.economic_evaluations += 1;
     work.bound_evaluations += 1;
-    work.fact_accesses += 3;
+    work.fact_accesses += 4;
+
+    if !evidence.execution_enabled {
+        return i64::MIN;
+    }
 
     let first_quantity = family.quantity_start;
     let last_quantity = family.quantity_end - 1;
@@ -434,10 +475,27 @@ fn resolve_exact_family(family: CandidateFamily, world: &VisibleWorld, result: &
     }
 }
 
-fn resolve_stale_family(family: CandidateFamily, world: &VisibleWorld, result: &mut EngineResult) {
-    let evidence = stale_cached_evidence(world);
+fn emit_stale_family_advance(family: CandidateFamily, result: &mut EngineResult) {
+    result.work.family_advances += 1;
+    result.work.stale_authorized_decisions += family.point_count() as u64;
 
+    for transformation_id in family.id_start..family.id_end {
+        for quantity in family.quantity_start..family.quantity_end {
+            result.advances.insert(CandidateKey {
+                transformation_id,
+                quantity,
+            });
+        }
+    }
+}
+
+fn resolve_aba_family(family: CandidateFamily, world: &VisibleWorld, result: &mut EngineResult) {
+    let evidence = old_a_cached_evidence(world);
     let stale_advance_proof = family_proven_advance(family, evidence, &mut result.work);
+
+    if stale_advance_proof && value_only_membrane_allows(evidence, world) {
+        result.work.aba_value_only_false_accepts += family.point_count() as u64;
+    }
 
     let allowed = proof_membrane_allows(evidence, world, &mut result.work);
 
@@ -446,7 +504,8 @@ fn resolve_stale_family(family: CandidateFamily, world: &VisibleWorld, result: &
     }
 
     if stale_advance_proof && allowed {
-        result.work.stale_authorized_decisions += family.point_count() as u64;
+        emit_stale_family_advance(family, result);
+        return;
     }
 
     if family.point_count() <= EXACT_FAMILY_POINT_LIMIT {
@@ -488,7 +547,7 @@ fn resolve_family(family: CandidateFamily, world: &VisibleWorld, result: &mut En
         return;
     }
 
-    if family_crosses_stale_boundary(family, world) && family.id_len() > 1 {
+    if family_crosses_aba_boundary(family, world) && family.id_len() > 1 {
         result.work.family_splits += 1;
         let (left, right) = split_family(family);
         resolve_family(left, world, result);
@@ -496,8 +555,8 @@ fn resolve_family(family: CandidateFamily, world: &VisibleWorld, result: &mut En
         return;
     }
 
-    if family_fully_in_stale_region(family, world) {
-        resolve_stale_family(family, world, result);
+    if family_fully_in_aba_region(family, world) {
+        resolve_aba_family(family, world, result);
     } else {
         resolve_fresh_family(family, world, result);
     }
@@ -522,20 +581,34 @@ fn run_pulse(world: &VisibleWorld) -> EngineResult {
     result
 }
 
-fn stale_reversal_count(world: &VisibleWorld) -> usize {
-    let stale_evidence = stale_cached_evidence(world);
+fn aba_lifecycle_is_valid() -> bool {
+    let lifecycle = [
+        (GENERATION_A_OLD, StateMarker::A),
+        (GENERATION_B, StateMarker::B),
+        (GENERATION_A_CURRENT, StateMarker::A),
+    ];
+
+    lifecycle[0].0 < lifecycle[1].0
+        && lifecycle[1].0 < lifecycle[2].0
+        && lifecycle[0].1 == lifecycle[2].1
+        && lifecycle[0].1 != lifecycle[1].1
+}
+
+fn aba_reversal_count(world: &VisibleWorld) -> usize {
+    let stale_evidence = old_a_cached_evidence(world);
     let mut reversals = 0;
 
-    for transformation_id in world.stale_region_start..world.stale_region_end {
+    for transformation_id in world.aba_region_start..world.aba_region_end {
         let current_evidence = current_evidence_for_candidate(transformation_id, world);
 
         for quantity in world.min_quantity..=world.max_quantity {
-            let stale_decision = candidate_profit(transformation_id, quantity, stale_evidence) > 0;
+            let stale_decision =
+                evidence_decision(transformation_id, quantity, stale_evidence);
 
             let current_decision =
-                candidate_profit(transformation_id, quantity, current_evidence) > 0;
+                evidence_decision(transformation_id, quantity, current_evidence);
 
-            if stale_decision && !current_decision {
+            if stale_decision == Decision::Advance && current_decision == Decision::Reject {
                 reversals += 1;
             }
         }
@@ -546,31 +619,36 @@ fn stale_reversal_count(world: &VisibleWorld) -> usize {
 
 fn print_work(label: &str, work: &WorkCounter) {
     println!("{label}");
-    println!("  family evaluations:          {}", work.family_evaluations);
-    println!("  family splits:               {}", work.family_splits);
-    println!("  family rejections:           {}", work.family_rejections);
-    println!("  exact expansions:            {}", work.exact_expansions);
+    println!("  family evaluations:           {}", work.family_evaluations);
+    println!("  family splits:                {}", work.family_splits);
+    println!("  family rejections:            {}", work.family_rejections);
+    println!("  family advances:              {}", work.family_advances);
+    println!("  exact expansions:             {}", work.exact_expansions);
     println!(
-        "  economic evaluations:        {}",
+        "  economic evaluations:         {}",
         work.economic_evaluations
     );
-    println!("  bound evaluations:           {}", work.bound_evaluations);
-    println!("  fact accesses:                {}", work.fact_accesses);
-    println!("  proof checks:                 {}", work.proof_checks);
+    println!("  bound evaluations:            {}", work.bound_evaluations);
+    println!("  fact accesses:                 {}", work.fact_accesses);
+    println!("  proof checks:                  {}", work.proof_checks);
     println!(
-        "  stale proofs blocked:         {}",
+        "  stale proofs blocked:          {}",
         work.stale_proofs_blocked
     );
     println!(
-        "  stale ADVANCE proofs blocked: {}",
+        "  stale ADVANCE proofs blocked:  {}",
         work.stale_advance_proofs_blocked
     );
     println!(
-        "  fresh proof authorizations:   {}",
+        "  ABA value-only false accepts:  {}",
+        work.aba_value_only_false_accepts
+    );
+    println!(
+        "  fresh proof authorizations:    {}",
         work.fresh_proof_authorizations
     );
     println!(
-        "  stale-authorized decisions:   {}",
+        "  stale-authorized decisions:    {}",
         work.stale_authorized_decisions
     );
 }
@@ -588,17 +666,21 @@ fn main() {
     let total_candidate_states =
         world.transformation_count * (world.max_quantity - world.min_quantity + 1);
 
-    let reversals = stale_reversal_count(&world);
+    let lifecycle_valid = aba_lifecycle_is_valid();
+    let reversals = aba_reversal_count(&world);
     let baseline_matches_oracle = baseline.advances == oracle;
     let pulse_matches_oracle = pulse.advances == oracle;
     let decision_agreement = baseline.advances == pulse.advances;
     let false_important_prunes = oracle.difference(&pulse.advances).count();
 
-    println!("Fixture: EZ-004 — Stale Evidence");
+    println!("Fixture: EZ-005 — Generations / ABA");
     println!("Total candidate states: {total_candidate_states}");
-    println!("Authoritative generation: {}", world.current_generation);
-    println!("Cached stale generation: {STALE_GENERATION}");
-    println!("Stale reversal count: {reversals}");
+    println!("Lifecycle: A(gen 1) -> B(gen 2) -> A(gen 3)");
+    println!("ABA lifecycle valid: {lifecycle_valid}");
+    println!("Current generation: {}", world.current_generation);
+    println!("Cached proof generation: {GENERATION_A_OLD}");
+    println!("Current visible marker: {:?}", world.current_marker);
+    println!("ABA reversal count: {reversals}");
     println!("Oracle ADVANCE count: {}", oracle.len());
     println!();
 
@@ -608,7 +690,11 @@ fn main() {
     println!("  decision agreement:      {decision_agreement}");
     println!("  false important prunes:  {false_important_prunes}");
     println!(
-        "  stale-authorized decisions: {}",
+        "  ABA value-only false accepts: {}",
+        pulse.work.aba_value_only_false_accepts
+    );
+    println!(
+        "  stale-authorized decisions:   {}",
         pulse.work.stale_authorized_decisions
     );
     println!();
@@ -633,7 +719,9 @@ fn main() {
 
     println!("Exact expansion reduction: {:.2}%", expansion_reduction);
 
-    let passed = reversals > 0
+    let passed = lifecycle_valid
+        && reversals > 0
+        && pulse.work.aba_value_only_false_accepts > 0
         && pulse.work.stale_proofs_blocked > 0
         && pulse.work.stale_advance_proofs_blocked > 0
         && pulse.work.stale_authorized_decisions == 0
@@ -646,9 +734,9 @@ fn main() {
     println!();
 
     if passed {
-        println!("EZ-004 CORRECTNESS GATE: PASS");
+        println!("EZ-005 CORRECTNESS GATE: PASS");
     } else {
-        println!("EZ-004 CORRECTNESS GATE: FAIL");
+        println!("EZ-005 CORRECTNESS GATE: FAIL");
         std::process::exit(1);
     }
 }
