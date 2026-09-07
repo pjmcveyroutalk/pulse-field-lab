@@ -1,0 +1,63 @@
+name: Rust 1.80 Preflight
+
+on:
+  push:
+    branches:
+      - preflight
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  preflight:
+    name: Rust 1.80 — Format, Check, Clippy, Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Install exact Rust 1.80 toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.80.0
+          components: rustfmt,clippy
+
+      - name: Verify compiler identity
+        run: |
+          rustc +1.80.0 --version
+          cargo +1.80.0 --version
+          rustfmt +1.80.0 --version
+          cargo +1.80.0 clippy --version
+
+      - name: Format with Rust 1.80
+        run: cargo +1.80.0 fmt --all
+
+      - name: Commit formatter changes when required
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "Rust 1.80 formatter made no changes."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .
+            git commit -m "Apply Rust 1.80 formatting"
+            git push
+          fi
+
+      - name: Verify formatting
+        run: cargo +1.80.0 fmt --all -- --check
+
+      - name: Compile
+        run: cargo +1.80.0 check --locked
+
+      - name: Run Clippy
+        run: cargo +1.80.0 clippy --locked --all-targets -- -D warnings
+
+      - name: Run release experiment
+        run: cargo +1.80.0 run --locked --release
