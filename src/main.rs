@@ -11,7 +11,7 @@ const BETA_REGION_END: usize = 30;
 const GAMMA_REGION_START: usize = 60;
 const GAMMA_REGION_END: usize = 70;
 
-const ALPHA_FACT: u8 = 1;
+const ALPHA_FACT: u8 = 1 << 0;
 const BETA_FACT: u8 = 1 << 1;
 const GAMMA_FACT: u8 = 1 << 2;
 
