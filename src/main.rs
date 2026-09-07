@@ -217,8 +217,7 @@ fn decision_at_protocol_slot(
     protocol_slot: u64,
     world: &VisibleWorld,
 ) -> Decision {
-    let capability_enabled =
-        protocol_capability_enabled(transformation_id, protocol_slot, world);
+    let capability_enabled = protocol_capability_enabled(transformation_id, protocol_slot, world);
 
     if capability_enabled && candidate_profit(transformation_id, quantity, evidence) > 0 {
         Decision::Advance
@@ -338,8 +337,7 @@ fn family_crosses_time_boundary(family: CandidateFamily, world: &VisibleWorld) -
 }
 
 fn byte_only_membrane_allows(evidence: Evidence, world: &VisibleWorld) -> bool {
-    evidence.dependency_id == world.dependency_id
-        && evidence.account_digest == world.account_digest
+    evidence.dependency_id == world.dependency_id && evidence.account_digest == world.account_digest
 }
 
 fn proof_membrane_allows(evidence: Evidence, world: &VisibleWorld, work: &mut WorkCounter) -> bool {
@@ -351,8 +349,7 @@ fn proof_membrane_allows(evidence: Evidence, world: &VisibleWorld, work: &mut Wo
     let evidence_was_valid = evidence.observed_slot <= evidence.valid_until_slot;
     let evidence_still_valid = world.current_protocol_slot <= evidence.valid_until_slot;
 
-    let allowed =
-        dependency_matches && bytes_match && evidence_was_valid && evidence_still_valid;
+    let allowed = dependency_matches && bytes_match && evidence_was_valid && evidence_still_valid;
 
     if !allowed {
         work.expired_proofs_blocked += 1;
@@ -521,8 +518,7 @@ fn resolve_time_sensitive_family(
     result: &mut EngineResult,
 ) {
     let evidence = cached_time_evidence(world);
-    let expired_advance_proof =
-        family_proven_advance(family, evidence, &mut result.work);
+    let expired_advance_proof = family_proven_advance(family, evidence, &mut result.work);
 
     if expired_advance_proof && byte_only_membrane_allows(evidence, world) {
         result.work.byte_only_false_accepts += family.point_count() as u64;
