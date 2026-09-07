@@ -115,17 +115,9 @@ fn dependency_mask(transformation_id: usize) -> u8 {
 }
 
 fn base_edge(transformation_id: usize) -> i64 {
-    if in_region(
-        transformation_id,
-        GAMMA_REGION_START,
-        GAMMA_REGION_END,
-    ) {
+    if in_region(transformation_id, GAMMA_REGION_START, GAMMA_REGION_END) {
         STABLE_ADVANCE_BASE_EDGE
-    } else if in_region(
-        transformation_id,
-        ALPHA_REGION_START,
-        BETA_REGION_END,
-    ) {
+    } else if in_region(transformation_id, ALPHA_REGION_START, BETA_REGION_END) {
         DEPENDENCY_BASE_EDGE
     } else {
         DEFAULT_BASE_EDGE
@@ -220,12 +212,8 @@ fn run_global_recompute(world: &World) -> RunResult {
 
     for transformation_id in 0..TRANSFORMATION_COUNT {
         for quantity in MIN_QUANTITY..=MAX_QUANTITY {
-            decisions.push(evaluate_exact(
-                transformation_id,
-                quantity,
-                world,
-                &mut work,
-            ));
+            let decision = evaluate_exact(transformation_id, quantity, world, &mut work);
+            decisions.push(decision);
         }
     }
 
@@ -261,12 +249,13 @@ fn run_pulse_selective(
             work.cache_invalidations += 1;
             invalidated_keys.insert(entry.key);
 
-            decisions.push(evaluate_exact(
+            let decision = evaluate_exact(
                 entry.key.transformation_id,
                 entry.key.quantity,
                 world,
                 &mut work,
-            ));
+            );
+            decisions.push(decision);
         } else {
             work.cache_reuses += 1;
             decisions.push(entry.decision);
@@ -369,10 +358,8 @@ fn main() {
     let unsafe_b = run_unsafe_stale_reuse(&phase_a_cache);
     let pulse_b = run_pulse_selective(&phase_a_cache, &phase_b, changed_facts);
 
-    let cache_decisions: Vec<Decision> = phase_a_cache
-        .iter()
-        .map(|entry| entry.decision)
-        .collect();
+    let cache_decisions: Vec<Decision> =
+        phase_a_cache.iter().map(|entry| entry.decision).collect();
 
     let expected_affected = expected_affected_keys(&phase_a_cache, changed_facts);
     let changed_truth = changed_decision_keys(&oracle_a, &oracle_b, &phase_a_cache);
@@ -387,6 +374,7 @@ fn main() {
     let missed_invalidations = expected_affected
         .difference(&pulse_b.invalidated_keys)
         .count();
+
     let false_invalidations = pulse_b
         .invalidated_keys
         .difference(&expected_affected)
@@ -398,6 +386,7 @@ fn main() {
     let alpha_entries = count_entries_with_fact(&phase_a_cache, ALPHA_FACT);
     let beta_entries = count_entries_with_fact(&phase_a_cache, BETA_FACT);
     let gamma_entries = count_entries_with_fact(&phase_a_cache, GAMMA_FACT);
+
     let alpha_beta_overlap =
         count_entries_with_both_facts(&phase_a_cache, ALPHA_FACT, BETA_FACT);
 
@@ -429,9 +418,7 @@ fn main() {
     println!("  Expected affected cone:        {}", expected_affected.len());
     println!("  Expected unaffected cache:     {unaffected_entries}");
     println!("  Decisions that truly changed:  {}", changed_truth.len());
-    println!(
-        "  Truth changes outside cone:    {changed_truth_outside_dependency_cone}"
-    );
+    println!("  Truth changes outside cone:    {changed_truth_outside_dependency_cone}");
     println!();
 
     println!("Oracle");
@@ -440,11 +427,15 @@ fn main() {
     println!();
 
     println!("Unsafe stale-cache reuse");
-    println!("  ADVANCE:                   {}", advance_count(&unsafe_b.decisions));
     println!(
-        "  stale-authorized decisions: {stale_authorized_decisions}"
+        "  ADVANCE:                   {}",
+        advance_count(&unsafe_b.decisions)
     );
-    println!("  exact recomputations:       {}", unsafe_b.work.exact_expansions);
+    println!("  stale-authorized decisions: {stale_authorized_decisions}");
+    println!(
+        "  exact recomputations:       {}",
+        unsafe_b.work.exact_expansions
+    );
     println!("  stale cache reuses:         {}", unsafe_b.work.cache_reuses);
     println!();
 
@@ -452,16 +443,17 @@ fn main() {
     println!("  Phase A cache matches Oracle: {cache_matches_phase_a}");
     println!("  global matches Oracle:        {global_matches_oracle}");
     println!("  Pulse matches Oracle:         {pulse_matches_oracle}");
-    println!(
-        "  Pulse stale-authorized:       {pulse_stale_authorized_decisions}"
-    );
+    println!("  Pulse stale-authorized:       {pulse_stale_authorized_decisions}");
     println!("  missed invalidations:         {missed_invalidations}");
     println!("  false invalidations:          {false_invalidations}");
     println!(
         "  invalidated entries:          {}",
         pulse_b.invalidated_keys.len()
     );
-    println!("  unaffected entries reused:    {}", pulse_b.work.cache_reuses);
+    println!(
+        "  unaffected entries reused:    {}",
+        pulse_b.work.cache_reuses
+    );
     println!();
 
     print_work("Phase A cache build work", &cache_build_work);
@@ -476,7 +468,10 @@ fn main() {
     let expansion_reduction =
         100.0 * (global_expansions - pulse_expansions) / global_expansions;
 
-    println!("Selective recomputation reduction: {:.2}%", expansion_reduction);
+    println!(
+        "Selective recomputation reduction: {:.2}%",
+        expansion_reduction
+    );
 
     let passed = cache_matches_phase_a
         && global_matches_oracle
