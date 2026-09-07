@@ -119,8 +119,7 @@ fn transformation_impact(transformation_id: usize) -> i64 {
 }
 
 fn candidate_is_blocked(transformation_id: usize, world: &VisibleWorld) -> bool {
-    transformation_id >= world.blocked_region_start
-        && transformation_id < world.blocked_region_end
+    transformation_id >= world.blocked_region_start && transformation_id < world.blocked_region_end
 }
 
 fn candidate_profit(transformation_id: usize, quantity: usize) -> i64 {
@@ -248,13 +247,10 @@ fn optimistic_profit_at_quantity(quantity: usize) -> i64 {
 }
 
 fn clamp_quantity(quantity: usize, start: usize, end: usize) -> usize {
-    quantity.max(start).min(end)
+    quantity.clamp(start, end)
 }
 
-fn family_optimistic_profit_upper_bound(
-    family: CandidateFamily,
-    work: &mut WorkCounter,
-) -> i64 {
+fn family_optimistic_profit_upper_bound(family: CandidateFamily, work: &mut WorkCounter) -> i64 {
     work.family_evaluations += 1;
     work.economic_evaluations += 1;
     work.bound_evaluations += 1;
@@ -273,10 +269,7 @@ fn family_optimistic_profit_upper_bound(
     first_profit.max(last_profit).max(vertex_profit)
 }
 
-fn family_proven_economic_reject(
-    family: CandidateFamily,
-    work: &mut WorkCounter,
-) -> bool {
+fn family_proven_economic_reject(family: CandidateFamily, work: &mut WorkCounter) -> bool {
     family_optimistic_profit_upper_bound(family, work) <= 0
 }
 
@@ -318,11 +311,7 @@ fn split_family(family: CandidateFamily) -> (CandidateFamily, CandidateFamily) {
     }
 }
 
-fn resolve_exact_family(
-    family: CandidateFamily,
-    world: &VisibleWorld,
-    result: &mut EngineResult,
-) {
+fn resolve_exact_family(family: CandidateFamily, world: &VisibleWorld, result: &mut EngineResult) {
     for transformation_id in family.id_start..family.id_end {
         for quantity in family.quantity_start..family.quantity_end {
             let key = CandidateKey {
@@ -389,10 +378,7 @@ fn run_pulse(world: &VisibleWorld) -> EngineResult {
     result
 }
 
-fn quantity_coupling_exists(
-    oracle: &BTreeSet<CandidateKey>,
-    world: &VisibleWorld,
-) -> bool {
+fn quantity_coupling_exists(oracle: &BTreeSet<CandidateKey>, world: &VisibleWorld) -> bool {
     for transformation_id in 0..world.transformation_count {
         if candidate_is_blocked(transformation_id, world) {
             continue;
